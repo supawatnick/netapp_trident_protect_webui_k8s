@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Trident Protect{% endblock %} | Trident Protect</title>
+  <link rel="stylesheet" href="/static/css/netapp.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        Trident Protect
+        <small>v26.02 UI</small>
+      </div>
+      <ul class="nav">
+        <li><a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/applications" class="{% if request.path == '/applications' %}active{% endif %}">Applications</a></li>
+        <li><a href="/backups" class="{% if request.path == '/backups' %}active{% endif %}">Backups</a></li>
+        <li><a href="/snapshots" class="{% if request.path == '/snapshots' %}active{% endif %}">Snapshots</a></li>
+        <li><a href="/schedules" class="{% if request.path == '/schedules' %}active{% endif %}">Schedules</a></li>
+        <li><a href="/restore" class="{% if request.path.startswith('/restore') %}active{% endif %}">Restore</a></li>
+        <li><a href="/settings" class="{% if request.path == '/settings' or '/clusters' in request.path or '/appvaults' in request.path %}active{% endif %}">Settings</a></li>
+      </ul>
+      <div style="margin-top: 32px; font-size: 11px; opacity: 0.6; line-height:1.6;">
+        Powered by NetApp<br>Professional Service Asean Team<br>&amp; Nick R.
+      </div>
+    </aside>
+    <main class="main">
+      <div id="toast-container"></div>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="/static/js/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

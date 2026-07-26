@@ -1,0 +1,39 @@
+app:
+  host: "0.0.0.0"
+  port: 8081
+  debug: false
+  # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+  secret_key: "REPLACE-WITH-RANDOM-SECRET-KEY"
+
+cli:
+  # Path to the tridentprotect-ctl binary
+  path: "bin/tridentprotect-ctl"
+
+refresh:
+  interval_sec: 30
+
+appvault:
+  # Default AppVault (object storage target for backups/snapshots)
+  default: "ontap-s3-appvault"
+  namespace: "trident-protect"
+
+clusters:
+  # Name of the currently active profile (must match a key in profiles below)
+  active: ""
+
+  profiles: {}
+  # Example structure:
+  # active: "production"
+  # profiles:
+  #   production:
+  #     api_url: "https://api.prod.example.com:6443"
+  #     appvault: "ontap-s3-appvault"
+  #     appvault_namespace: "trident-protect"
+  #     insecure_skip_tls: true
+  #     description: "Production cluster"
+  #   staging:
+  #     api_url: "https://api.staging.example.com:6443"
+  #     appvault: "ontap-s3-appvault"
+  #     appvault_namespace: "trident-protect"
+  #     insecure_skip_tls: false
+  #     description: "Staging cluster"

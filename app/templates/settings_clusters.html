@@ -1,0 +1,202 @@
+{% extends "settings_base.html" %}
+{% block settings_content %}
+<div class="card">
+  <div class="between mb-1">
+    <h2>Current Connection</h2>
+    <button class="btn small" onclick="testConnection()">Test</button>
+  </div>
+    <table>
+    <tbody>
+      <tr><td><b>Platform</b></td><td id="detected-platform">—</td></tr>
+      <tr><td><b>User</b></td><td id="whoami-user">—</td></tr>
+      <tr><td><b>Server</b></td><td id="whoami-server">—</td></tr>
+      <tr><td><b id="cluster-label">Cluster</b></td><td id="ocp-cluster-name">—</td></tr>
+      <tr><td><b>Active profile</b></td><td id="active-profile">—</td></tr>
+      <tr><td><b>Token (preview)</b></td>
+          <td id="token-preview">
+            <span class="text-mono">—</span>
+            <button class="btn small secondary" onclick="showFullToken()" style="margin-left:8px;">Show full</button>
+          </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2 style="cursor:pointer" onclick="toggleHelp()">
+    How to connect to a different cluster?
+    <span id="help-toggle" style="float:right;font-size:14px;">▼</span>
+  </h2>
+  <div id="help-content" style="display:none;margin-top:16px;">
+    <p class="text-muted">To switch to a different cluster, follow these 3 steps. The UI works with both <b>OpenShift</b> and <b>vanilla Kubernetes</b> clusters.</p>
+
+    <h3>Step 1: Get a bearer token from the target cluster</h3>
+    <div id="help-ocp">
+      <h4>For OpenShift:</h4>
+      <p>From the cluster's OpenShift web console:</p>
+      <ol>
+        <li>Open the console URL: <code>https://console-openshift-console.apps.&lt;your-cluster-domain&gt;</code></li>
+        <li>Login with your credentials (e.g., <code>kubeadmin</code>)</li>
+        <li>Click your username in the top-right corner</li>
+        <li>Select <b>"Copy login command"</b></li>
+        <li>Click <b>"Display Token"</b></li>
+        <li>Copy the token (starts with <code>sha256~</code>)</li>
+      </ol>
+    </div>
+    <div id="help-k8s">
+      <h4>For vanilla Kubernetes:</h4>
+      <p>From your kubeconfig file (typically <code>~/.kube/config</code>):</p>
+      <ol>
+        <li>Run: <code>kubectl config view --minify -o jsonpath='{.users[0].user.token}'</code></li>
+        <li>Or create a service account token:
+          <pre><code>kubectl create token my-service-account --duration=24h</code></pre>
+        </li>
+        <li>Copy the token (long base64 string)</li>
+      </ol>
+    </div>
+    <p class="text-muted">Or via CLI on a machine with the right tool configured for that cluster:</p>
+    <pre><code># OpenShift
+oc login https://api.your-cluster:6443
+oc whoami -t
+
+# Vanilla Kubernetes
+kubectl config set-credentials myuser --token=&lt;your-token&gt;</code></pre>
+
+    <h3>Step 2: Add the cluster profile in this UI</h3>
+    <ol>
+      <li>Click <b>"+ Add Profile"</b> below</li>
+      <li>Fill in Profile Name + API URL</li>
+      <li>Click <b>Save Profile</b></li>
+    </ol>
+
+    <h3>Step 3: Login &amp; Switch</h3>
+    <ol>
+      <li>Click <b>"Login &amp; Switch"</b> on the new profile row</li>
+      <li>Paste the bearer token from Step 1</li>
+      <li>Click <b>"Login &amp; Switch"</b></li>
+      <li>The active profile switches automatically — no restart needed</li>
+    </ol>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="cursor:pointer" onclick="toggleKubeconfig()">
+    Import Kubeconfig
+    <span id="kubeconfig-toggle" style="float:right;font-size:14px;">▼</span>
+  </h2>
+  <div id="kubeconfig-content" style="display:none;margin-top:12px;">
+    <p class="text-muted">
+      Use this to connect to a vanilla Kubernetes cluster by pasting its
+      <code>kubeconfig</code> file. The kubeconfig will be saved to
+      <code>~/.kube/config</code> (a backup of any existing file is made first
+      as <code>~/.kube/config.bak</code>), and a new cluster profile will be
+      created automatically from the <code>current-context</code>.
+    </p>
+    <p class="text-muted" style="font-size:12px;margin-top:4px;">
+      <b>For OpenShift clusters</b>, you can use the
+      <i>Login &amp; Switch</i> form below with a bearer token instead.
+    </p>
+    <div class="form-row" style="margin-top:12px;">
+      <label><span>Kubeconfig YAML</span>
+        <textarea id="kubeconfig-text" rows="10" style="font-family:var(--font-mono);font-size:12px;width:100%;" placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;- cluster:&#10;    server: https://api.k8s-cluster:6443&#10;  name: my-cluster&#10;users:&#10;- user:&#10;    token: eyJhbGciOi...&#10;  name: my-user&#10;contexts:&#10;- context:&#10;    cluster: my-cluster&#10;    user: my-user&#10;  name: my-context&#10;current-context: my-context"></textarea>
+      </label>
+    </div>
+    <div class="form-row" style="display:flex;align-items:center;gap:8px;">
+      <input type="file" id="kubeconfig-file" accept=".yaml,.yml,.conf,application/x-yaml,text/yaml" style="font-size:13px;" />
+      <button class="btn secondary small" onclick="loadKubeconfigFile()">Load File</button>
+      <button class="btn" onclick="importKubeconfig()">Apply Kubeconfig</button>
+    </div>
+    <div id="kubeconfig-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div id="kubeconfig-preview" style="display:none;margin-top:12px;background:#f7f7f7;padding:10px;border-radius:6px;font-size:13px;"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="between mb-1">
+    <h2>Cluster Profiles</h2>
+    <button class="btn small" onclick="showAddForm()">+ Add Profile</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>API URL</th>
+          <th>Description</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="profiles-tbody">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add/Edit Profile Form -->
+<div id="profile-form" style="display:none;" class="card">
+  <h2 id="profile-form-title">Add Profile</h2>
+  <div class="form-row">
+    <label><span>Profile Name</span><input id="pf-name" placeholder="production" /></label>
+    <label><span>Description</span><input id="pf-description" placeholder="Optional" /></label>
+  </div>
+  <div class="form-row">
+    <label><span>API URL</span><input id="pf-api-url" placeholder="https://api.cluster.example.com:6443" /></label>
+  </div>
+  <div class="form-row">
+    <label><span>Skip TLS Verify</span>
+      <select id="pf-insecure">
+        <option value="true">Yes (self-signed cert)</option>
+        <option value="false">No (production)</option>
+      </select>
+    </label>
+    <label><span>Platform</span>
+      <select id="pf-platform">
+        <option value="">Auto-detect (recommended)</option>
+        <option value="ocp">OpenShift (oc)</option>
+        <option value="k8s">Kubernetes (kubectl)</option>
+      </select>
+    </label>
+  </div>
+  <div class="form-row">
+    <button class="btn" onclick="saveProfile()">Save Profile</button>
+    <button class="btn secondary" onclick="hideProfileForm()">Cancel</button>
+  </div>
+</div>
+
+<!-- Login Form -->
+<div id="login-form" style="display:none;" class="card">
+  <h2>Login to <span id="login-profile-name">—</span></h2>
+  <p class="text-muted">Paste the bearer token from the target cluster.</p>
+
+  <h3>Bearer Token (Recommended)</h3>
+  <div class="form-row">
+    <label><span>Bearer Token</span><input id="login-token" placeholder="your-bearer-token" /></label>
+  </div>
+  <div class="form-row">
+    <button class="btn" onclick="loginWithToken()">Login &amp; Switch</button>
+  </div>
+
+  <details id="login-password-section" style="margin-top:16px;">
+    <summary style="cursor:pointer;font-weight:600;">Alternative: Username + Password (OCP only)</summary>
+    <p class="text-muted" style="margin-top:8px;">Username/password login is only supported on OpenShift. For vanilla Kubernetes, use a bearer token.</p>
+    <div style="margin-top:8px;">
+      <div class="form-row">
+        <label><span>Username</span><input id="login-username" placeholder="username" /></label>
+        <label><span>Password</span><input id="login-password" type="password" placeholder="•••" /></label>
+      </div>
+      <div class="form-row">
+        <button class="btn secondary" onclick="loginWithPassword()">Login &amp; Switch</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="form-row" style="margin-top:16px;">
+    <button class="btn secondary" onclick="hideLoginForm()">Cancel</button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}
