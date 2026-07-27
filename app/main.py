@@ -198,7 +198,7 @@ def register_routes(app: Flask) -> None:
     def api_backup_validate():
         body = request.get_json() or {}
         yaml_str = body.get("yaml", "")
-        ok, msg = trident_protect.validate_backup_yaml(yaml_str)
+        ok, msg, _ = trident_protect.validate_backup_yaml(yaml_str)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
     @app.route("/api/backup/apply", methods=["POST"])
@@ -206,11 +206,11 @@ def register_routes(app: Flask) -> None:
         body = request.get_json() or {}
         yaml_str = body.get("yaml", "")
 
-        ok, msg = trident_protect.validate_backup_yaml(yaml_str)
+        ok, msg, modified_yaml = trident_protect.validate_backup_yaml(yaml_str)
         if not ok:
             return jsonify({"ok": False, "message": f"Invalid YAML: {msg}"}), 400
 
-        ok, msg = trident_protect.apply_backup_yaml(yaml_str)
+        ok, msg = trident_protect.apply_backup_yaml(modified_yaml)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
     @app.route("/api/backup/<namespace>/<name>/backuprestores", methods=["POST"])
@@ -335,7 +335,7 @@ def register_routes(app: Flask) -> None:
     def api_snapshot_validate():
         body = request.get_json() or {}
         yaml_str = body.get("yaml", "")
-        ok, msg = trident_protect.validate_snapshot_yaml(yaml_str)
+        ok, msg, _ = trident_protect.validate_snapshot_yaml(yaml_str)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
     @app.route("/api/snapshot/apply", methods=["POST"])
@@ -343,11 +343,11 @@ def register_routes(app: Flask) -> None:
         body = request.get_json() or {}
         yaml_str = body.get("yaml", "")
 
-        ok, msg = trident_protect.validate_snapshot_yaml(yaml_str)
+        ok, msg, modified_yaml = trident_protect.validate_snapshot_yaml(yaml_str)
         if not ok:
             return jsonify({"ok": False, "message": f"Invalid YAML: {msg}"}), 400
 
-        ok, msg = trident_protect.apply_snapshot_yaml(yaml_str)
+        ok, msg = trident_protect.apply_snapshot_yaml(modified_yaml)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
     # ----- Application detail -----
@@ -410,8 +410,6 @@ def register_routes(app: Flask) -> None:
             "platform": trident_protect.detect_platform(),
         })
 
-    @app.route("/api/ocp-cluster")
-    def api_ocp_cluster():
         """Return cluster info (works for both OCP and k8s)."""
         return jsonify(trident_protect.get_cluster_info())
 
@@ -440,7 +438,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"ok": False, "message": "platform must be 'ocp' or 'k8s' or empty (auto)"}), 400
 
         cfg = Config.instance()
-        cfg.profiles[name] = {
+        profile = {
             "api_url": api_url,
             "appvault": body.get("appvault", "ontap-s3-appvault"),
             "appvault_namespace": body.get("appvault_namespace", "trident-protect"),
@@ -448,6 +446,14 @@ def register_routes(app: Flask) -> None:
             "description": body.get("description", ""),
             "platform": platform,  # "" = auto-detect
         }
+        # Optional fields for k8s profiles
+        token = body.get("token", "").strip()
+        if token:
+            profile["token"] = token
+        kubeconfig_context = body.get("kubeconfig_context", "").strip()
+        if kubeconfig_context:
+            profile["kubeconfig_context"] = kubeconfig_context
+        cfg.profiles[name] = profile
         cfg.save()
         return jsonify({"ok": True, "message": f"Profile '{name}' saved", "restart_required": False})
 
@@ -521,23 +527,40 @@ def register_routes(app: Flask) -> None:
         if not server_url:
             return jsonify({"ok": False, "message": "current context's cluster has no server URL"}), 400
 
-        # 3. Write to ~/.kube/config (backup existing first)
+        # 3. Merge new kubeconfig into existing ~/.kube/config
         kube_path = Path.home() / ".kube" / "config"
         kube_path.parent.mkdir(parents=True, exist_ok=True)
-        backup_path = kube_path.with_suffix(".config.bak")
 
+        existing_kc = {}
         if kube_path.exists():
             try:
-                kube_path.replace(backup_path)
-            except OSError as e:
-                return jsonify({"ok": False, "message": f"Failed to backup existing kubeconfig: {e}"}), 500
+                existing_kc = yaml.safe_load(kube_path.read_text()) or {}
+            except Exception:
+                existing_kc = {}
+
+        existing_clusters = {c.get("name"): c for c in existing_kc.get("clusters", [])}
+        existing_users = {u.get("name"): u for u in existing_kc.get("users", [])}
+        existing_contexts = {c.get("name"): c for c in existing_kc.get("contexts", [])}
+
+        for c in clusters:
+            existing_clusters[c.get("name")] = c
+        for u in users:
+            existing_users[u.get("name")] = u
+        for ctx in contexts:
+            existing_contexts[ctx.get("name")] = ctx
+
+        merged = {
+            "apiVersion": "v1",
+            "kind": "Config",
+            "clusters": list(existing_clusters.values()),
+            "users": list(existing_users.values()),
+            "contexts": list(existing_contexts.values()),
+            "current-context": current_context,
+        }
 
         try:
-            kube_path.write_text(kubeconfig_yaml)
-        except OSError as e:
-            # Restore backup if write failed
-            if backup_path.exists():
-                backup_path.replace(kube_path)
+            kube_path.write_text(yaml.dump(merged, default_flow_style=False, sort_keys=False, width=4096))
+        except Exception as e:
             return jsonify({"ok": False, "message": f"Failed to write kubeconfig: {e}"}), 500
 
         # 4. Auto-create profile in config.yaml
@@ -615,7 +638,14 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/settings/switch", methods=["POST"])
     def api_switch_profile():
-        """Switch active cluster profile + login to it."""
+        """Switch active cluster profile + kubeconfig context.
+
+        For k8s profiles: actually switches kubeconfig context via
+        'kubectl config use-context' so tridentprotect-ctl queries
+        the right cluster.
+
+        For OCP profiles: updates the active label (login handled separately).
+        """
         body = request.get_json() or {}
         name = body.get("name", "").strip()
         if not name:
@@ -625,14 +655,50 @@ def register_routes(app: Flask) -> None:
             return jsonify({"ok": False, "message": "Profile not found"}), 404
         profile = cfg.profiles[name]
 
-        # Update active
+        # Update active profile
         cfg.active_cluster = name
         cfg.save()
 
+        # For k8s profiles: switch kubeconfig context
+        if profile.get("platform") == "k8s":
+            kubeconfig_context = profile.get("kubeconfig_context", "")
+            if kubeconfig_context:
+                rc, out, err = trident_protect.oc_run(
+                    ["config", "use-context", kubeconfig_context]
+                )
+                if rc == 0:
+                    return jsonify({
+                        "ok": True,
+                        "message": f"Switched to '{name}' (kubeconfig context: {kubeconfig_context}). Data now shows cluster '{name}'.",
+                    })
+                else:
+                    return jsonify({
+                        "ok": True,
+                        "message": f"Active profile set to '{name}' but could not switch kubeconfig context: {err or out}",
+                    })
+
+        # For OCP profiles: login if token is stored
+        if profile.get("platform") == "ocp":
+            stored_token = profile.get("token", "").strip()
+            if stored_token:
+                api_url = profile["api_url"]
+                insecure = profile.get("insecure_skip_tls", True)
+                ok, msg = trident_protect.oc_login_with_token(api_url, stored_token, insecure)
+                if ok:
+                    return jsonify({
+                        "ok": True,
+                        "message": f"Switched to '{name}' and authenticated. Data now shows cluster '{name}'.",
+                        "auto_login": True,
+                    })
+                else:
+                    return jsonify({
+                        "ok": True,
+                        "message": f"Set '{name}' as active but auto-login failed: {msg}",
+                    })
+
         return jsonify({
             "ok": True,
-            "message": f"Active profile set to '{name}'. Use 'Login & Switch' to authenticate and apply.",
-            "restart_required": False,
+            "message": f"Active profile set to '{name}'. Use 'Login & Switch' to authenticate.",
         })
 
     @app.route("/api/settings/login", methods=["POST"])
@@ -658,10 +724,21 @@ def register_routes(app: Flask) -> None:
         api_url = profile["api_url"]
         insecure = profile.get("insecure_skip_tls", True)
 
-        # k8s profiles use kubeconfig — no token login needed
+        # k8s profiles use kubeconfig — switch context
         if profile.get("platform") == "k8s":
             cfg.active_cluster = name
             cfg.save()
+            kubeconfig_context = profile.get("kubeconfig_context", "")
+            if kubeconfig_context:
+                rc, out, err = trident_protect.oc_run(
+                    ["config", "use-context", kubeconfig_context]
+                )
+                if rc == 0:
+                    return jsonify({
+                        "ok": True,
+                        "message": f"Switched to '{name}' (context: {kubeconfig_context})",
+                        "skip_login": True,
+                    })
             return jsonify({
                 "ok": True,
                 "message": "k8s profile uses kubeconfig — authentication handled by imported kubeconfig",

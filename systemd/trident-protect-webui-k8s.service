@@ -1,0 +1,23 @@
+[Unit]
+Description=Trident Protect Web UI (Kubernetes Edition)
+Documentation=https://github.com/supawatnick/netapp_trident_protect_webui_k8s
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ntap/trident-protect/web-k8s
+ExecStart=/root/ntap/trident-protect/web-k8s/.venv/bin/python3 -m app.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trident-protect-webui-k8s
+
+Environment=PYTHONUNBUFFERED=1
+
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

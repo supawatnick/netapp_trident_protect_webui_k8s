@@ -285,12 +285,29 @@ def get_cli_path() -> str:
     return p
 
 
+def _get_active_kubeconfig_context() -> str:
+    """Return the kubeconfig context name from the active profile's kubeconfig_context field.
+
+    This is used to pass --context to tridentprotect-ctl so it queries
+    the correct cluster when switching between multiple k8s profiles.
+    Returns empty string if no context is set (use kubeconfig current-context).
+    """
+    try:
+        profile = _get_active_profile()
+        return profile.get("kubeconfig_context", "")
+    except Exception:
+        return ""
+
+
 def oc_run(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
     """Run platform CLI (oc or kubectl) and return (rc, stdout, stderr).
 
     The CLI binary is determined per-call:
     - Active profile's `platform` field (manual override) — 'ocp' or 'k8s'
     - Auto-detect: 'oc' if available, else 'kubectl'
+
+    For tridentprotect-ctl calls that need a specific cluster context,
+    pass --context=<context_name> based on the active profile.
 
     Returns (127, "", "kubectl not found") if the binary doesn't exist.
     """
@@ -874,36 +891,47 @@ def serialize_backup_to_yaml(b: dict) -> str:
     )
 
 
-def validate_backup_yaml(yaml_str: str) -> tuple[bool, str]:
-    """Parse + validate Backup YAML without applying."""
+def validate_backup_yaml(yaml_str: str) -> tuple[bool, str, str]:
+    """Parse + validate Backup YAML without applying.
+
+    Returns (ok, message, modified_yaml_str) where modified_yaml_str contains
+    any auto-generated values (e.g. metadata.name if not provided).
+    """
     try:
         doc = _yaml.safe_load(yaml_str)
     except _yaml.YAMLError as e:
-        return False, f"YAML syntax error: {e}"
+        return False, f"YAML syntax error: {e}", yaml_str
     if not isinstance(doc, dict):
-        return False, "YAML must be a single document (mapping)"
+        return False, "YAML must be a single document (mapping)", yaml_str
 
     kind = doc.get("kind")
     if kind != "Backup":
-        return False, f"kind must be 'Backup' (got '{kind}')"
+        return False, f"kind must be 'Backup' (got '{kind}')", yaml_str
 
     api_version = doc.get("apiVersion", "")
     if not api_version.startswith("protect.trident.netapp.io"):
-        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')"
+        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')", yaml_str
 
     metadata = doc.get("metadata", {}) or {}
     name = metadata.get("name")
     ns = metadata.get("namespace")
     if not name:
-        return False, "metadata.name required"
+        # Auto-generate name if not provided
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        name = f"manual-backup-{ts}"
+        if "metadata" not in doc:
+            doc["metadata"] = {}
+        doc["metadata"]["name"] = name
+        metadata = doc["metadata"]
+        yaml_str = _yaml.dump(doc, default_flow_style=False, sort_keys=False, width=4096)
     if not ns:
-        return False, "metadata.namespace required"
+        return False, "metadata.namespace required", yaml_str
 
     spec = doc.get("spec", {}) or {}
     if not spec.get("applicationRef"):
-        return False, "spec.applicationRef required"
+        return False, "spec.applicationRef required", yaml_str
 
-    return True, f"Valid — will create Backup '{name}' in namespace '{ns}'"
+    return True, f"Valid — will create Backup '{name}' in namespace '{ns}'", yaml_str
 
 
 def apply_backup_yaml(yaml_str: str) -> tuple[bool, str]:
@@ -990,36 +1018,47 @@ def serialize_restore_to_yaml(r: dict, kind: str) -> str:
     )
 
 
-def validate_snapshot_yaml(yaml_str: str) -> tuple[bool, str]:
-    """Parse + validate Snapshot YAML without applying."""
+def validate_snapshot_yaml(yaml_str: str) -> tuple[bool, str, str]:
+    """Parse + validate Snapshot YAML without applying.
+
+    Returns (ok, message, modified_yaml_str) where modified_yaml_str contains
+    any auto-generated values (e.g. metadata.name if not provided).
+    """
     try:
         doc = _yaml.safe_load(yaml_str)
     except _yaml.YAMLError as e:
-        return False, f"YAML syntax error: {e}"
+        return False, f"YAML syntax error: {e}", yaml_str
     if not isinstance(doc, dict):
-        return False, "YAML must be a single document (mapping)"
+        return False, "YAML must be a single document (mapping)", yaml_str
 
     kind = doc.get("kind")
     if kind != "Snapshot":
-        return False, f"kind must be 'Snapshot' (got '{kind}')"
+        return False, f"kind must be 'Snapshot' (got '{kind}')", yaml_str
 
     api_version = doc.get("apiVersion", "")
     if not api_version.startswith("protect.trident.netapp.io"):
-        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')"
+        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')", yaml_str
 
     metadata = doc.get("metadata", {}) or {}
     name = metadata.get("name")
     ns = metadata.get("namespace")
     if not name:
-        return False, "metadata.name required"
+        # Auto-generate name if not provided
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        name = f"manual-snap-{ts}"
+        if "metadata" not in doc:
+            doc["metadata"] = {}
+        doc["metadata"]["name"] = name
+        metadata = doc["metadata"]
+        yaml_str = _yaml.dump(doc, default_flow_style=False, sort_keys=False, width=4096)
     if not ns:
-        return False, "metadata.namespace required"
+        return False, "metadata.namespace required", yaml_str
 
     spec = doc.get("spec", {}) or {}
     if not spec.get("applicationRef"):
-        return False, "spec.applicationRef required"
+        return False, "spec.applicationRef required", yaml_str
 
-    return True, f"Valid — will create Snapshot '{name}' in namespace '{ns}'"
+    return True, f"Valid — will create Snapshot '{name}' in namespace '{ns}'", yaml_str
 
 
 def apply_snapshot_yaml(yaml_str: str) -> tuple[bool, str]:

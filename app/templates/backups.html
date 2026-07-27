@@ -257,7 +257,7 @@ function switchBackupTab(tab) {
 
 function buildBackupYamlFromForm() {
   const name = document.getElementById('add-backup-name').value.trim()
-    || `manual-${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}`;
+    || `manual-${new Date().toISOString().replace(/[:.]/g,'').slice(0,15).toLowerCase()}`;
   const ns = document.getElementById('add-backup-ns').value || 'trident-protect';
   const app = document.getElementById('add-backup-app').value || 'my-app';
   const vault = document.getElementById('add-backup-vault').value || 'ontap-s3-appvault';

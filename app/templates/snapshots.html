@@ -258,7 +258,7 @@ function switchSnapshotTab(tab) {
 
 function buildSnapshotYamlFromForm() {
   const name = document.getElementById('add-snapshot-name').value.trim()
-    || `snap-${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}`;
+    || `snap-${new Date().toISOString().replace(/[:.]/g,'').slice(0,15).toLowerCase()}`;
   const ns = document.getElementById('add-snapshot-ns').value || 'trident-protect';
   const app = document.getElementById('add-snapshot-app').value || 'my-app';
   const vault = document.getElementById('add-snapshot-vault').value || 'ontap-s3-appvault';

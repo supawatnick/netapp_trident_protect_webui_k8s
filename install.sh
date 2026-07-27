@@ -443,14 +443,14 @@ if [ "$IS_ROOT" -eq 0 ]; then
     info "Use 'nohup ./run.sh' to start manually"
 else
     # Update systemd unit file with actual install path
-    SERVICE_FILE="/etc/systemd/system/trident-protect-webui.service"
+    SERVICE_FILE="/etc/systemd/system/trident-protect-webui-k8s.service"
     USER_NAME="${SUDO_USER:-root}"
     INSTALL_PATH="$SCRIPT_DIR"
 
     sed -e "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_PATH}|" \
         -e "s|ExecStart=.*|ExecStart=${INSTALL_PATH}/.venv/bin/python3 -m app.main|" \
         -e "s|User=.*|User=${USER_NAME}|" \
-        systemd/trident-protect-webui.service > "$SERVICE_FILE"
+        systemd/trident-protect-webui-k8s.service > "$SERVICE_FILE"
 
     ok "Service file installed: $SERVICE_FILE"
 
