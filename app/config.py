@@ -24,6 +24,9 @@ class Config:
         self.refresh = data.get("refresh", {})
         self.appvault = data.get("appvault", {})
 
+        # Audit log settings (enabled by default when section is absent)
+        self.logs = data.get("logs", {})
+
         # Multi-cluster profiles
         self.clusters = data.get("clusters", {})
         self.active_cluster = self.clusters.get("active", "")
@@ -31,6 +34,10 @@ class Config:
 
         # Active profile (or empty if no profiles)
         self.active_profile = self.profiles.get(self.active_cluster, {})
+
+        # Auth (dashboard login + LDAP)
+        # Default to enabled=False so legacy installs keep working until operator opts in.
+        self.auth = data.get("auth") or {}
 
     @classmethod
     def instance(cls):
@@ -60,20 +67,31 @@ class Config:
                 "profiles": self.profiles,
             },
         }
+        # Preserve logs section if it was loaded
+        if getattr(self, "logs", None):
+            data["logs"] = self.logs
+        # Preserve auth section if it was loaded (LDAP config lives here)
+        if getattr(self, "auth", None):
+            data["auth"] = self.auth
         path = self.config_path()
         with open(path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
         Config.reload()
 
+    def save_auth(self, auth: dict) -> None:
+        """Persist auth section (LDAP config, enabled flag) and reload."""
+        self.auth = auth or {}
+        self.save()
 
-def get_active_profile() -> dict:
-    """Return currently active cluster profile."""
+
+def get_kubecontext(profile_name: str | None = None) -> str | None:
+    """Return kubeconfig context name for a profile, or None if not set.
+
+    If profile_name is None, use the active profile.
+    """
     cfg = Config.instance()
-    if cfg.active_profile:
-        return cfg.active_profile
-    # Fallback to legacy appvault section if no profile set
-    return {
-        "api_url": "",
-        "appvault": cfg.appvault.get("name", "ontap-s3-appvault"),
-        "appvault_namespace": cfg.appvault.get("namespace", "trident-protect"),
-    }
+    name = profile_name or cfg.active_cluster
+    profile = cfg.profiles.get(name, {})
+    if not profile:
+        return None
+    return profile.get("kubecontext") or profile.get("kubeconfig_context") or None

@@ -1,62 +1,21 @@
-// Settings page logic
+// Settings → Clusters page logic (Kubernetes edition, v1.4.3)
 
 let currentProfiles = {};
 let currentActive = '';
 let editingProfile = null;
 let loggingInProfile = null;
 let fullToken = null;
-let detectedPlatform = 'unknown';
 
 async function loadSettings() {
   try {
-    const [settingsRes, platformRes] = await Promise.all([
-      fetch('/api/settings'),
-      fetch('/api/platform'),
-    ]);
-    const data = await settingsRes.json();
-    const platformData = await platformRes.json();
+    const res = await tpFetch('/api/settings');
+    const data = await res.json();
     currentProfiles = data.profiles || {};
     currentActive = data.active || '';
-    detectedPlatform = platformData.platform || 'unknown';
 
-    // Populate whoami info
     document.getElementById('whoami-user').textContent = data.whoami?.user || '—';
     document.getElementById('whoami-server').textContent = data.whoami?.server || '—';
     document.getElementById('active-profile').textContent = currentActive || '(none)';
-
-    // Display detected platform
-    const platformEl = document.getElementById('detected-platform');
-    const platformLabel = platformEl ? platformEl.parentElement : null;
-    const cliName = platformData.cli || '';
-    if (platformEl) {
-      const badge = detectedPlatform === 'ocp' ? 'OCP' :
-                     detectedPlatform === 'k8s' ? 'Kubernetes' :
-                     'Unknown';
-      const color = detectedPlatform === 'ocp' ? '#0066cc' :
-                    detectedPlatform === 'k8s' ? '#7c3aed' :
-                    '#999';
-      platformEl.innerHTML = `<span style="color:${color};font-weight:600">${badge}</span>` +
-        (cliName ? ` <span style="color:#999;font-size:12px">(${cliName})</span>` : '');
-    }
-
-    // Update cluster label based on platform
-    const clusterLabel = document.getElementById('cluster-label');
-    if (clusterLabel) {
-      clusterLabel.textContent = detectedPlatform === 'ocp' ? 'OCP Cluster' :
-                                  detectedPlatform === 'k8s' ? 'K8s Context' : 'Cluster';
-    }
-
-    // Show/hide OCP-specific help sections
-    document.querySelectorAll('[id^="help-"]').forEach(el => {
-      if (el.id === 'help-ocp') el.style.display = (detectedPlatform === 'ocp') ? '' : 'none';
-      if (el.id === 'help-k8s') el.style.display = (detectedPlatform === 'k8s') ? '' : 'none';
-    });
-
-    // Show/hide password section in login form (OCP only)
-    const passwordSection = document.getElementById('login-password-section');
-    if (passwordSection) {
-      passwordSection.style.display = (detectedPlatform === 'ocp') ? '' : 'none';
-    }
 
     renderProfiles();
     loadClusterInfo();
@@ -67,7 +26,7 @@ async function loadSettings() {
 
 async function loadClusterInfo() {
   try {
-    const res = await fetch('/api/ocp-cluster');
+    const res = await tpFetch('/api/cluster-info');
     const info = await res.json();
     const el = document.getElementById('ocp-cluster-name');
     if (!info || !info.name) {
@@ -75,8 +34,8 @@ async function loadClusterInfo() {
       return;
     }
     let txt = info.name;
-    if (info.platform) txt += ` <span style="color:#999;font-size:12px">(${info.platform})</span>`;
-    if (info.version) txt += ` <span style="color:#999;font-size:12px">· v${info.version}</span>`;
+    if (info.platform) txt += ` <span style="color:#999;font-size:12px">(${escapeHtml(info.platform)})</span>`;
+    if (info.version) txt += ` <span style="color:#999;font-size:12px">· v${escapeHtml(info.version)}</span>`;
     el.innerHTML = txt;
   } catch (e) {
     document.getElementById('ocp-cluster-name').textContent = '—';
@@ -87,45 +46,33 @@ function renderProfiles() {
   const tbody = document.getElementById('profiles-tbody');
   const names = Object.keys(currentProfiles).sort();
   if (names.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">No profiles. Click "+ Add Profile".</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No profiles yet. Click "+ Add Profile".</td></tr>';
     return;
   }
   tbody.innerHTML = names.map(name => {
     const p = currentProfiles[name];
     const isActive = name === currentActive;
-    const platform = p.platform || '';
-    const isK8s = platform === 'k8s';
+    const isAdminUser = isAdmin();
 
-    // Actions:
-    // - k8s profiles: show Switch button (when not active) + Connected badge. No login needed.
-    // - OCP profiles: show Login & Switch button.
-    let actions;
-    if (isK8s) {
-      actions = (isActive
-        ? `<span class="badge success">Connected (kubeconfig)</span>`
-        : `<button class="btn small" onclick="switchToProfile('${escapeHtml(name)}')">Switch</button>
-           <span class="badge success">Connected</span>`)
-        + `<button class="btn small secondary" onclick="editProfile('${escapeHtml(name)}')">Edit</button>
-           <button class="btn small danger" onclick="deleteProfile('${escapeHtml(name)}')"${isActive ? ' disabled' : ''}>Del</button>`;
-    } else {
-      actions = (isActive
-        ? ''
+    // For k8s: Switch button when not active, Login & Switch for token-based profile setup.
+    const actions = (
+      (isActive
+        ? '<span class="badge success">In use</span>'
         : `<button class="btn small" onclick="showLoginForm('${escapeHtml(name)}')">Login &amp; Switch</button>`)
-        + `<button class="btn small secondary" onclick="editProfile('${escapeHtml(name)}')">Edit</button>
-           <button class="btn small danger" onclick="deleteProfile('${escapeHtml(name)}')"${isActive ? ' disabled' : ''}>Del</button>`;
-    }
-
-    const platformBadge = platform
-      ? ` <span class="badge" style="background:${platform === 'k8s' ? '#7c3aed' : '#0066cc'};color:#fff">${platform.toUpperCase()}</span>`
-      : '';
+      + (isAdminUser
+        ? ` <button class="btn small secondary" onclick="editProfile('${escapeHtml(name)}')">Edit</button>`
+        : '')
+      + (isAdminUser
+        ? ` <button class="btn small danger" onclick="deleteProfile('${escapeHtml(name)}')"${isActive ? ' disabled' : ''}>Del</button>`
+        : '')
+    );
 
     return `
       <tr${isActive ? ' style="background:#fffbea"' : ''}>
-        <td><b>${escapeHtml(name)}</b>${isActive ? ' <span class="badge protected">ACTIVE</span>' : ''}${platformBadge}</td>
+        <td><b>${escapeHtml(name)}</b>${isActive ? ' <span class="badge protected">ACTIVE</span>' : ''}</td>
         <td class="text-mono">${escapeHtml(p.api_url || '')}</td>
         <td>${escapeHtml(p.appvault || 'ontap-s3-appvault')}/${escapeHtml(p.appvault_namespace || 'trident-protect')}</td>
         <td class="text-muted">${escapeHtml(p.description || '—')}</td>
-        <td>${isActive ? '<span class="badge success">In use</span>' : '<span class="badge pending">Standby</span>'}</td>
         <td>${actions}</td>
       </tr>
     `;
@@ -134,7 +81,7 @@ function renderProfiles() {
 
 async function testConnection() {
   try {
-    const res = await fetch('/api/settings/test', {method:'POST'});
+    const res = await tpFetch('/api/settings/test', {method: 'POST'});
     const r = await res.json();
     toast(r.ok ? 'Connection OK: ' + r.message : 'Failed: ' + r.message, r.ok ? 'success' : 'error');
   } catch (e) {
@@ -148,7 +95,7 @@ async function showFullToken() {
     return;
   }
   try {
-    const res = await fetch('/api/settings/token');
+    const res = await tpFetch('/api/settings/token');
     const r = await res.json();
     if (r.ok) {
       fullToken = r.full;
@@ -162,6 +109,7 @@ async function showFullToken() {
 }
 
 function showAddForm() {
+  if (!tpRequireAdmin()) return;
   editingProfile = null;
   document.getElementById('profile-form-title').textContent = 'Add Profile';
   document.getElementById('pf-name').value = '';
@@ -169,11 +117,12 @@ function showAddForm() {
   document.getElementById('pf-description').value = '';
   document.getElementById('pf-api-url').value = 'https://';
   document.getElementById('pf-insecure').value = 'true';
-  document.getElementById('pf-platform').value = '';
+  document.getElementById('pf-appvault').value = 'ontap-s3-appvault';
   document.getElementById('profile-form').style.display = 'block';
 }
 
 function editProfile(name) {
+  if (!tpRequireAdmin()) return;
   const p = currentProfiles[name];
   if (!p) return;
   editingProfile = name;
@@ -183,7 +132,7 @@ function editProfile(name) {
   document.getElementById('pf-description').value = p.description || '';
   document.getElementById('pf-api-url').value = p.api_url || '';
   document.getElementById('pf-insecure').value = p.insecure_skip_tls ? 'true' : 'false';
-  document.getElementById('pf-platform').value = p.platform || '';
+  document.getElementById('pf-appvault').value = p.appvault || 'ontap-s3-appvault';
   document.getElementById('profile-form').style.display = 'block';
 }
 
@@ -193,21 +142,22 @@ function hideProfileForm() {
 }
 
 async function saveProfile() {
+  if (!tpRequireAdmin()) return;
   const body = {
     name: document.getElementById('pf-name').value.trim(),
     description: document.getElementById('pf-description').value.trim(),
     api_url: document.getElementById('pf-api-url').value.trim(),
     insecure_skip_tls: document.getElementById('pf-insecure').value === 'true',
-    platform: document.getElementById('pf-platform').value || '',
+    appvault: document.getElementById('pf-appvault').value.trim() || 'ontap-s3-appvault',
   };
   if (!body.name || !body.api_url) {
     toast('Name and API URL are required', 'error');
     return;
   }
   try {
-    const res = await fetch('/api/settings/profile', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+    const res = await tpFetch('/api/settings/profile', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
     const r = await res.json();
@@ -222,9 +172,10 @@ async function saveProfile() {
 }
 
 async function deleteProfile(name) {
+  if (!tpRequireAdmin()) return;
   if (!confirm(`Delete profile "${name}"?`)) return;
   try {
-    const res = await fetch(`/api/settings/profile/${encodeURIComponent(name)}`, {method:'DELETE'});
+    const res = await tpFetch(`/api/settings/profile/${encodeURIComponent(name)}`, {method: 'DELETE'});
     const r = await res.json();
     toast(r.message, r.ok ? 'success' : 'error');
     if (r.ok) await loadSettings();
@@ -237,8 +188,6 @@ function showLoginForm(name) {
   loggingInProfile = name;
   document.getElementById('login-profile-name').textContent = name;
   document.getElementById('login-token').value = '';
-  document.getElementById('login-username').value = '';
-  document.getElementById('login-password').value = '';
   document.getElementById('login-form').style.display = 'block';
 }
 
@@ -247,49 +196,17 @@ function hideLoginForm() {
   loggingInProfile = null;
 }
 
-async function switchToProfile(name) {
-  try {
-    const res = await fetch('/api/settings/switch', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name}),
-    });
-    const r = await res.json();
-    toast(r.message, r.ok ? 'success' : 'error');
-    if (r.ok) {
-      await loadSettings();
-      await testConnection();
-    }
-  } catch (e) {
-    toast('Switch failed: ' + e.message, 'error');
-  }
-}
-
 async function loginWithToken() {
   const token = document.getElementById('login-token').value.trim();
   if (!token) {
-    toast('Token required', 'error');
+    toast('Bearer token required', 'error');
     return;
   }
-  await doLogin({name: loggingInProfile, token});
-}
-
-async function loginWithPassword() {
-  const username = document.getElementById('login-username').value.trim();
-  const password = document.getElementById('login-password').value;
-  if (!username || !password) {
-    toast('Username and password required', 'error');
-    return;
-  }
-  await doLogin({name: loggingInProfile, username, password});
-}
-
-async function doLogin(body) {
   try {
-    const res = await fetch('/api/settings/login', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body),
+    const res = await tpFetch('/api/settings/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: loggingInProfile, token}),
     });
     const r = await res.json();
     toast(r.message, r.ok ? 'success' : 'error');
@@ -378,19 +295,18 @@ function showKubeconfigPreview(preview) {
 }
 
 async function importKubeconfig() {
+  if (!tpRequireAdmin()) return;
   const yaml = document.getElementById('kubeconfig-text').value.trim();
   if (!yaml) {
     showKubeconfigMsg('Paste or load a kubeconfig first', 'error');
     return;
   }
-
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = 'Applying...';
   showKubeconfigMsg('Validating and writing kubeconfig...', 'info');
-
   try {
-    const res = await fetch('/api/settings/kubeconfig', {
+    const res = await tpFetch('/api/settings/kubeconfig', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({kubeconfig: yaml}),

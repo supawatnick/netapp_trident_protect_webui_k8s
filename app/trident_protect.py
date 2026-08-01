@@ -86,10 +86,13 @@ def _cli_path() -> str:
     return p
 
 
-def _run(args, timeout=TIMEOUT_SEC) -> tuple[int, str, str]:
+def _run(args, timeout=TIMEOUT_SEC, context: str | None = None) -> tuple[int, str, str]:
     """Run tridentprotect-ctl and return (rc, stdout, stderr)."""
+    cmd = [get_cli_path()]
+    if context:
+        cmd += ["--context", context]
     proc = subprocess.run(
-        [get_cli_path()] + args,
+        cmd + args,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -97,14 +100,14 @@ def _run(args, timeout=TIMEOUT_SEC) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def _list(resource: str, namespace: str = "") -> list[dict]:
+def _list(resource: str, namespace: str = "", context: str | None = None) -> list[dict]:
     """List resources cluster-wide or in a namespace. Returns parsed JSON items."""
     args = ["get", resource, "-o", "json"]
     if namespace:
         args += ["-n", namespace]
     else:
         args += ["-A"]
-    rc, out, err = _run(args)
+    rc, out, err = _run(args, context=context)
     if rc != 0:
         return []
     try:
@@ -114,9 +117,9 @@ def _list(resource: str, namespace: str = "") -> list[dict]:
         return []
 
 
-def _get(resource: str, name: str, namespace: str) -> dict | None:
+def _get(resource: str, name: str, namespace: str, context: str | None = None) -> dict | None:
     """Get a single resource."""
-    rc, out, err = _run(["get", resource, name, "-n", namespace, "-o", "json"])
+    rc, out, err = _run(["get", resource, name, "-n", namespace, "-o", "json"], context=context)
     if rc != 0:
         return None
     try:
@@ -299,7 +302,7 @@ def _get_active_kubeconfig_context() -> str:
         return ""
 
 
-def oc_run(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
+def oc_run(args: list[str], timeout: int = 30, context: str | None = None) -> tuple[int, str, str]:
     """Run platform CLI (oc or kubectl) and return (rc, stdout, stderr).
 
     The CLI binary is determined per-call:
@@ -314,8 +317,11 @@ def oc_run(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
     cli = get_platform_cli()
     if not shutil.which(cli):
         return 127, "", f"{cli} not found in PATH"
+    cmd = [cli]
+    if context:
+        cmd += ["--context", context]
     proc = subprocess.run(
-        [cli] + args,
+        cmd + args,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -559,23 +565,23 @@ def list_namespaces() -> list[dict]:
     return items
 
 
-def list_applications(namespace: str | None = None) -> list[dict]:
-    items = [serialize_application(a) for a in _list("application", namespace or "")]
+def list_applications(namespace: str | None = None, context: str | None = None) -> list[dict]:
+    items = [serialize_application(a) for a in _list("application", namespace or "", context=context)]
     if namespace:
         items = [i for i in items if i.get("namespace") == namespace]
     return items
 
 
-def list_backups(namespace: str | None = None) -> list[dict]:
-    return [serialize_backup(b) for b in _list("backup", namespace or "")]
+def list_backups(namespace: str | None = None, context: str | None = None) -> list[dict]:
+    return [serialize_backup(b) for b in _list("backup", namespace or "", context=context)]
 
 
-def list_snapshots(namespace: str | None = None) -> list[dict]:
-    return [serialize_snapshot(s) for s in _list("snapshot", namespace or "")]
+def list_snapshots(namespace: str | None = None, context: str | None = None) -> list[dict]:
+    return [serialize_snapshot(s) for s in _list("snapshot", namespace or "", context=context)]
 
 
-def list_schedules() -> list[dict]:
-    return [serialize_schedule(s) for s in _list("schedule")]
+def list_schedules(context: str | None = None) -> list[dict]:
+    return [serialize_schedule(s) for s in _list("schedule", context=context)]
 
 
 # --- AppVault management ---
@@ -646,8 +652,8 @@ def serialize_appvault_to_yaml(av: dict) -> str:
     )
 
 
-def list_appvaults(namespace: str = "") -> list[dict]:
-    items = _list("appvault", namespace) if namespace else _list("appvault")
+def list_appvaults(namespace: str = "", context: str | None = None) -> list[dict]:
+    items = _list("appvault", namespace, context=context) if namespace else _list("appvault", context=context)
     items = [av for av in items if av.get("metadata", {}).get("namespace", "").startswith("trident")]
     return [serialize_appvault(av) for av in items]
 
@@ -1324,24 +1330,26 @@ def delete_restore(restore_type: str, namespace: str, name: str) -> tuple[bool, 
     return False, (err or out).strip()
 
 
-def get_storageclasses() -> list[str]:
+def get_storageclasses(context: str | None = None) -> list[str]:
     """Return list of StorageClass names via oc/kubectl."""
-    proc = subprocess.run(
-        [get_platform_cli(), "get", "sc", "-o", "jsonpath={.items[*].metadata.name}"],
-        capture_output=True, text=True, timeout=10,
-    )
+    cmd = [get_platform_cli()]
+    if context:
+        cmd += ["--context", context]
+    cmd += ["get", "sc", "-o", "jsonpath={.items[*].metadata.name}"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     if proc.returncode == 0:
         return sorted(proc.stdout.strip().split())
     return []
 
 
-def get_namespaces() -> list[str]:
+def get_namespaces(context: str | None = None) -> list[str]:
     """Return list of non-system namespaces via oc/kubectl."""
-    proc = subprocess.run(
-        [get_platform_cli(), "get", "ns", "-o",
-         "jsonpath={.items[?(@.status.phase==\"Active\")].metadata.name}"],
-        capture_output=True, text=True, timeout=10,
-    )
+    cmd = [get_platform_cli()]
+    if context:
+        cmd += ["--context", context]
+    cmd += ["get", "ns", "-o",
+            "jsonpath={.items[?(@.status.phase==\"Active\")].metadata.name}"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     if proc.returncode == 0:
         all_ns = proc.stdout.strip().split()
         return sorted([n for n in all_ns if not n.startswith("openshift-")
@@ -1355,3 +1363,542 @@ def test_connection() -> tuple[bool, str]:
     if rc == 0:
         return True, out.strip() or "Connected"
     return False, (err or out).strip() or "CLI failed"
+
+
+
+# ---------------------------------------------------------------------------
+# Disaster Recovery (AppMirrorRelationships)
+# ---------------------------------------------------------------------------
+
+def find_kubecontext_for_api(api_url: str) -> str:
+    """Find a kubeconfig context whose cluster URL matches api_url.
+
+    Used after `oc login` / `kubectl config set-cluster` to discover the
+    context that was created so subsequent `kubectl --context` calls
+    target the right cluster.
+    """
+    cli = get_platform_cli()
+    try:
+        proc = subprocess.run(
+            [cli, "config", "view", "-o", "json"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    try:
+        cfg = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return ""
+    cluster_name = ""
+    for c in cfg.get("clusters", []):
+        if c.get("cluster", {}).get("server") == api_url:
+            cluster_name = c.get("name", "")
+            break
+    if not cluster_name:
+        return ""
+    for c in cfg.get("contexts", []):
+        if c.get("context", {}).get("cluster") == cluster_name:
+            return c.get("name", "")
+    return ""
+
+
+def list_namespaces_for_context(context: str | None = None) -> list[dict]:
+    """Return list of {name, ...} dicts for namespaces on the given context.
+
+    Used by DR endpoints where we need cluster-aware namespace discovery.
+    """
+    items = _list("namespace", context=context)
+    out = []
+    for ns in items:
+        md = ns.get("metadata", {})
+        st = ns.get("status", {})
+        out.append({
+            "name": md.get("name", ""),
+            "status": st.get("phase", "Unknown"),
+            "created": _fmt_time(md.get("creationTimestamp")),
+        })
+    # Hide system namespaces (mirror OCP DR behaviour: skip kube-* and openshift-*)
+    out = [n for n in out
+           if not n["name"].startswith("kube-")
+           and not n["name"].startswith("openshift-")]
+    return out
+
+
+def list_storage_classes(context: str | None = None) -> list[dict]:
+    """List storage classes (name + isDefault) on a given context."""
+    items = _list("storageclass", context=context)
+    out = []
+    for sc in items:
+        name = sc.get("metadata", {}).get("name", "")
+        ann = (sc.get("metadata", {}).get("annotations") or {})
+        is_default = (
+            ann.get("storageclass.kubernetes.io/is-default-class") == "true"
+            or ann.get("storageclass.beta.kubernetes.io/is-default-class") == "true"
+        )
+        out.append({"name": name, "isDefault": is_default})
+    return out
+
+
+def _derive_cluster_from_namespace(namespace: str) -> str:
+    """Best-effort cluster name from a namespace prefix.
+
+    For the k8s edition, the source/destination cluster is not derivable
+    purely from the namespace name (no clus1-/clus2- convention unless
+    the user follows one). Returns empty string when no pattern matches.
+    """
+    if not namespace:
+        return ""
+    # Reserved: trident-protect namespace alone doesn't identify a cluster
+    if namespace == "trident-protect":
+        return ""
+    return ""
+
+
+def serialize_amr(amr: dict) -> dict:
+    """Serialize an AppMirrorRelationship CR to a flat dict."""
+    md = amr.get("metadata", {}) or {}
+    sp = amr.get("spec", {}) or {}
+    st = amr.get("status", {}) or {}
+    conds = st.get("conditions", []) or []
+    error_msg = ""
+    for c in conds:
+        if c.get("status", "").lower() == "false" or "error" in (c.get("type", "")).lower():
+            error_msg = c.get("message", c.get("reason", ""))
+            break
+    if not error_msg:
+        error_msg = st.get("error", "")
+
+    ns_mapping = sp.get("namespaceMapping", []) or []
+    src_ns = ""
+    dest_ns = ""
+    if ns_mapping and isinstance(ns_mapping[0], dict):
+        src_ns = ns_mapping[0].get("source", "")
+        dest_ns = ns_mapping[0].get("destination", "")
+    if not dest_ns:
+        dest_namespaces = st.get("destinationNamespaces", []) or []
+        if dest_namespaces:
+            dest_ns = dest_namespaces[0]
+
+    derived_source_cluster = _derive_cluster_from_namespace(src_ns)
+    derived_dest_cluster = _derive_cluster_from_namespace(dest_ns)
+    annotations = md.get("annotations", {}) or {}
+    annotation_source_cluster = annotations.get("trident.netapp.io/source-cluster", "")
+    amr_lives_on_cluster = amr.get("_cluster", "")
+    source_cluster = derived_source_cluster or annotation_source_cluster
+    dest_cluster = derived_dest_cluster or amr_lives_on_cluster
+    if (derived_source_cluster and derived_dest_cluster
+            and derived_source_cluster == derived_dest_cluster
+            and amr_lives_on_cluster
+            and amr_lives_on_cluster != derived_source_cluster):
+        dest_cluster = amr_lives_on_cluster
+
+    return {
+        "name": md.get("name"),
+        "namespace": md.get("namespace"),
+        "created": _fmt_time(md.get("creationTimestamp")),
+        "age": _age(md.get("creationTimestamp")),
+        "desiredState": sp.get("desiredState", ""),
+        "sourceCluster": source_cluster or "—",
+        "sourceNamespace": src_ns,
+        "sourceAppVault": sp.get("sourceAppVaultRef", "—"),
+        "sourceApplication": sp.get("sourceApplicationName", "—"),
+        "sourceApplicationUID": sp.get("sourceApplicationUID", ""),
+        "destinationAppVault": sp.get("destinationAppVaultRef", "—"),
+        "destinationApplication": st.get("destinationApplicationRef", "—"),
+        "destinationNamespace": dest_ns,
+        "destinationCluster": dest_cluster or amr.get("_cluster", "—"),
+        "recurrenceRule": sp.get("recurrenceRule", ""),
+        "storageClassName": sp.get("storageClassName", ""),
+        "state": st.get("state", "Unknown"),
+        "stateClass": _state_class(st.get("state")),
+        "lastTransferTime": _fmt_time((st.get("lastTransfer") or {}).get("completionTimestamp")),
+        "lastTransferTimeAge": _age((st.get("lastTransfer") or {}).get("completionTimestamp")),
+        "lastTransferSize": (st.get("lastTransfer") or {}).get("transferSizeBytes"),
+        "lastTransferSizeHuman": _fmt_bytes((st.get("lastTransfer") or {}).get("transferSizeBytes")),
+        "error": error_msg,
+        "conditions": conds,
+        "raw": amr,
+    }
+
+
+def list_amr(context: str | None = None, cluster: str = "") -> list[dict]:
+    """List AppMirrorRelationships on a given context."""
+    items = _list("appmirrorrelationship", context=context)
+    out = []
+    for amr in items:
+        if cluster:
+            amr["_cluster"] = cluster
+        out.append(serialize_amr(amr))
+    return out
+
+
+def get_amr(namespace: str, name: str, context: str | None = None, cluster: str = "") -> dict | None:
+    """Get a single AppMirrorRelationship."""
+    item = _get("appmirrorrelationship", name, namespace, context=context)
+    if item and cluster:
+        item["_cluster"] = cluster
+    return item
+
+
+def serialize_amr_to_yaml(amr: dict) -> str:
+    """Convert AppMirrorRelationship CR dict to valid YAML."""
+    clean = {**amr}
+    if "apiVersion" not in clean:
+        clean["apiVersion"] = "protect.trident.netapp.io/v1"
+    if "kind" not in clean:
+        clean["kind"] = "AppMirrorRelationship"
+    ordered = {
+        "apiVersion": clean.pop("apiVersion"),
+        "kind": clean.pop("kind"),
+        "metadata": {},
+        "spec": {},
+        "status": {},
+    }
+    if isinstance(clean.get("metadata"), dict):
+        ordered["metadata"] = {
+            k: v for k, v in clean["metadata"].items() if k != "managedFields"
+        }
+        del clean["metadata"]
+    ordered["spec"] = clean.pop("spec", {})
+    ordered["status"] = clean.pop("status", {})
+    for k, v in clean.items():
+        ordered[k] = v
+    return _yaml.dump(
+        ordered, default_flow_style=False, sort_keys=False, indent=2,
+        allow_unicode=True, width=4096,
+    )
+
+
+def validate_amr_yaml(yaml_str: str) -> tuple[bool, str]:
+    """Parse + validate AppMirrorRelationship YAML (flat schema)."""
+    try:
+        doc = _yaml.safe_load(yaml_str)
+    except _yaml.YAMLError as e:
+        return False, f"YAML syntax error: {e}"
+    if not isinstance(doc, dict):
+        return False, "YAML must be a single document (mapping)"
+
+    kind = doc.get("kind")
+    if kind != "AppMirrorRelationship":
+        return False, f"kind must be 'AppMirrorRelationship' (got '{kind}')"
+    api_version = doc.get("apiVersion", "")
+    if not api_version.startswith("protect.trident.netapp.io"):
+        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')"
+
+    metadata = doc.get("metadata", {}) or {}
+    name = metadata.get("name")
+    ns = metadata.get("namespace")
+    if not name:
+        return False, "metadata.name required"
+    if not ns:
+        return False, "metadata.namespace required"
+
+    spec = doc.get("spec", {}) or {}
+    if not spec.get("desiredState"):
+        spec["desiredState"] = "Established"
+    for field in ("sourceAppVaultRef", "destinationAppVaultRef",
+                  "sourceApplicationName", "sourceApplicationUID",
+                  "recurrenceRule"):
+        if not spec.get(field):
+            return False, f"spec.{field} required"
+
+    return True, f"Valid — will create AppMirrorRelationship '{name}' in namespace '{ns}'"
+
+
+def apply_amr_yaml(yaml_str: str, context: str | None = None, source_cluster: str = "") -> tuple[bool, str]:
+    """Apply AppMirrorRelationship YAML via `kubectl apply -f -`.
+
+    Strips legacy nested spec keys, ensures desiredState defaults,
+    injects source-cluster annotation if provided.
+    """
+    try:
+        doc = _yaml.safe_load(yaml_str)
+        if not isinstance(doc, dict):
+            return False, "YAML must be a single document (mapping)"
+        spec = doc.setdefault("spec", {})
+        spec.setdefault("desiredState", "Established")
+        for k in ("source", "destination", "storageClassRef"):
+            if k in spec:
+                spec.pop(k)
+        if source_cluster:
+            md = doc.setdefault("metadata", {})
+            annotations = md.setdefault("annotations", {})
+            if isinstance(annotations, dict):
+                annotations["trident.netapp.io/source-cluster"] = source_cluster
+        yaml_str = _yaml.safe_dump(doc, default_flow_style=False, sort_keys=False, indent=2)
+    except _yaml.YAMLError as e:
+        return False, f"YAML parse error: {e}"
+
+    cmd = [get_platform_cli()]
+    if context:
+        cmd += ["--context", context]
+    cmd += ["apply", "-f", "-"]
+    proc = subprocess.run(cmd, input=yaml_str, capture_output=True, text=True, timeout=30)
+    if proc.returncode == 0:
+        return True, (proc.stdout or "AppMirrorRelationship applied").strip()
+    return False, (proc.stderr or proc.stdout).strip()
+
+
+def wait_for_snapshot(namespace: str, name: str, timeout: int = 60, context: str | None = None) -> tuple[bool, str]:
+    """Poll a snapshot CR until Completed or Failed state."""
+    import time as _t
+    deadline = _t.time() + timeout
+    last_state = "Unknown"
+    while _t.time() < deadline:
+        snap = _get("snapshot", name, namespace, context=context)
+        if snap:
+            state = (snap.get("status", {}).get("state", "") or "").lower()
+            last_state = state or "Unknown"
+            if state in ("completed", "success"):
+                return True, "Snapshot completed"
+            if state in ("failed", "error"):
+                return False, snap.get("status", {}).get("error", "") or "Snapshot failed"
+        _t.sleep(2)
+    return False, f"Snapshot did not complete within {timeout}s (last state: {last_state})"
+
+
+def trigger_bootstrap_snapshot(snapshot_name: str, application_ref: str, namespace: str,
+                                appvault_ref: str, context: str | None = None) -> tuple[bool, str]:
+    """Create + wait for a snapshot (apply YAML via stdin)."""
+    manifest = {
+        "apiVersion": "protect.trident.netapp.io/v1",
+        "kind": "Snapshot",
+        "metadata": {"name": snapshot_name, "namespace": namespace},
+        "spec": {"applicationRef": application_ref, "appVaultRef": appvault_ref},
+    }
+    yaml_str = _yaml.safe_dump(manifest, default_flow_style=False, sort_keys=False)
+    cmd = [get_platform_cli()]
+    if context:
+        cmd += ["--context", context]
+    cmd += ["apply", "-f", "-"]
+    proc = subprocess.run(cmd, input=yaml_str, capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout).strip()
+    return wait_for_snapshot(namespace, snapshot_name, timeout=300, context=context)
+
+
+def delete_amr(namespace: str, name: str, context: str | None = None) -> tuple[bool, str]:
+    rc, out, err = _run(["delete", "appmirrorrelationship", name, "-n", namespace], context=context)
+    if rc == 0:
+        return True, out.strip() or f"Deleted {namespace}/{name}"
+    return False, (err or out).strip()
+
+
+def failover_amr(namespace: str, name: str, context: str | None = None) -> tuple[bool, str]:
+    rc, out, err = oc_run(
+        ["patch", "appmirrorrelationship", name, "-n", namespace,
+         "--type", "merge", "-p", '{"spec":{"desiredState":"Promoted"}}'],
+        context=context,
+    )
+    if rc == 0:
+        return True, (out.strip() or f"Failover triggered for {namespace}/{name}")
+    return False, (err or out).strip()
+
+
+def resync_amr(namespace: str, name: str, context: str | None = None) -> tuple[bool, str]:
+    rc, out, err = oc_run(
+        ["patch", "appmirrorrelationship", name, "-n", namespace,
+         "--type", "merge", "-p", '{"spec":{"desiredState":"Established"}}'],
+        context=context,
+    )
+    if rc == 0:
+        return True, (out.strip() or f"Resync triggered for {namespace}/{name}")
+    return False, (err or out).strip()
+
+
+def list_app_schedules(namespace: str, app_name: str, context: str | None = None) -> list[dict]:
+    """List schedules linked to a specific application in a namespace."""
+    schedules = list_schedules(context=context)
+    return [
+        s for s in schedules
+        if s.get("applicationRef") == app_name and s.get("namespace") == namespace
+    ]
+
+
+def get_reverse_wizard_state(namespace: str, name: str, context: str | None = None,
+                              source_cluster: str = "") -> dict:
+    """Gather state for the Reverse (YAML) wizard (read-only)."""
+    from .config import Config
+    cfg = Config.instance()
+    state = {
+        "amrName": name,
+        "amrNamespace": namespace,
+        "activeProfile": cfg.active_cluster,
+        "sourceClusterProfile": source_cluster,
+        "destinationClusterProfile": "",
+        "promoted": False,
+        "oldAmrDeleted": False,
+        "hasScheduleOnSource": False,
+        "hasSnapshotOnSource": False,
+        "schedulesOnSource": [],
+        "schedulesToDisable": [],
+        "recurrenceRule": "",
+        "sourceAppName": "",
+        "sourceAppUID": "",
+        "sourceNamespace": "",
+        "destinationNamespace": "",
+        "sourceAppVault": "",
+        "destinationAppVault": "",
+        "hasSnapshotOnDestination": False,
+        "schedulesOnDestination": [],
+        "defaultStorageClassOnDestination": "",
+        "storageClassesOnDestination": [],
+        "destinationActiveProfileMatches": False,
+        "allSchedules": [],
+    }
+    amr = get_amr(namespace, name, context=context, cluster=cfg.active_cluster)
+    if not amr:
+        return state
+    sp = amr.get("spec", {}) or {}
+    st = amr.get("status", {}) or {}
+    state["recurrenceRule"] = sp.get("recurrenceRule", "")
+    state["sourceAppName"] = sp.get("sourceApplicationName", "")
+    state["sourceAppVault"] = sp.get("sourceAppVaultRef", "")
+    state["destinationAppVault"] = sp.get("destinationAppVaultRef", "")
+    ns_mapping = sp.get("namespaceMapping", []) or []
+    if ns_mapping:
+        state["sourceNamespace"] = ns_mapping[0].get("source", "")
+        state["destinationNamespace"] = ns_mapping[0].get("destination", "")
+    state["promoted"] = (st.get("state", "").lower() == "promoted")
+
+    # Schedules on source cluster
+    src_ns = state["sourceNamespace"]
+    if src_ns and state["sourceAppName"]:
+        try:
+            src_scheds = list_app_schedules(src_ns, state["sourceAppName"], context=None)
+            state["schedulesOnSource"] = src_scheds
+            state["hasScheduleOnSource"] = bool(src_scheds)
+            state["schedulesToDisable"] = [s for s in src_scheds if s.get("enabled")]
+        except Exception as e:
+            log.warning(f"Reverse wizard: list_app_schedules on source failed: {e}")
+
+    # Snapshots/backups on source
+    if src_ns:
+        try:
+            snaps = list_snapshots(namespace=src_ns, context=None)
+            backups = list_backups(namespace=src_ns, context=None)
+            state["hasSnapshotOnSource"] = bool(snaps or backups)
+        except Exception as e:
+            log.warning(f"Reverse wizard: snapshots/backups check failed: {e}")
+
+    # Schedules on destination
+    dest_ns = state["destinationNamespace"]
+    if dest_ns:
+        try:
+            dest_scheds = list_schedules(context=context)
+            dest_app_scheds = [s for s in dest_scheds if s.get("namespace") == dest_ns]
+            state["schedulesOnDestination"] = dest_app_scheds
+            state["allSchedules"] = dest_scheds
+        except Exception as e:
+            log.warning(f"Reverse wizard: list_schedules on destination failed: {e}")
+        try:
+            dest_snaps = list_snapshots(namespace=dest_ns, context=context)
+            state["hasSnapshotOnDestination"] = bool(dest_snaps)
+        except Exception as e:
+            log.warning(f"Reverse wizard: destination snapshots check failed: {e}")
+        try:
+            scs = list_storage_classes(context=context)
+            state["storageClassesOnDestination"] = [s["name"] for s in scs]
+            for s in scs:
+                if s.get("isDefault"):
+                    state["defaultStorageClassOnDestination"] = s["name"]
+                    break
+        except Exception as e:
+            log.warning(f"Reverse wizard: storage classes on destination failed: {e}")
+
+    # oldAmrDeleted — not auto-detectable, require user check
+    state["oldAmrDeleted"] = False
+    state["destinationActiveProfileMatches"] = (
+        state["activeProfile"] == state["destinationClusterProfile"]
+    )
+    return state
+
+
+def get_dr_overview() -> dict:
+    """Get DR overview from all configured cluster profiles."""
+    from .config import Config
+    cfg = Config.instance()
+    result = {
+        "clusters": {},
+        "relationships": [],
+        "totals": {"total": 0, "healthy": 0, "degraded": 0, "failed": 0},
+    }
+    for pname, profile in cfg.profiles.items():
+        ctx = profile.get("kubecontext") or profile.get("kubeconfig_context")
+        try:
+            apps = list_applications(context=ctx)
+            amrs = list_amr(context=ctx, cluster=pname)
+            result["clusters"][pname] = {
+                "description": profile.get("description", pname),
+                "apps": len(apps),
+                "relationships": len(amrs),
+                "connected": True,
+            }
+            for amr in amrs:
+                result["relationships"].append(amr)
+                result["totals"]["total"] += 1
+                sc = amr.get("stateClass", "")
+                if sc == "success":
+                    result["totals"]["healthy"] += 1
+                elif sc == "error":
+                    result["totals"]["failed"] += 1
+                else:
+                    result["totals"]["degraded"] += 1
+        except Exception as e:
+            log.warning(f"DR overview failed for {pname}: {e}")
+            result["clusters"][pname] = {
+                "description": profile.get("description", pname),
+                "apps": 0,
+                "relationships": 0,
+                "connected": False,
+                "error": str(e),
+            }
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Trident Protect version detection (per cluster, for the sidebar banner)
+# ---------------------------------------------------------------------------
+
+def _version_tuple(v: str) -> tuple:
+    """Parse a dotted version string like '26.06.0' into a comparable tuple.
+
+    Non-numeric parts are ignored.
+    """
+    import re as _re
+    parts = _re.findall(r"\d+", v or "")
+    return tuple(int(p) for p in parts)
+
+
+def get_trident_protect_version(context: str | None = None) -> str:
+    """Detect the Trident Protect version installed on a cluster.
+
+    Reads the `trident-protect` namespace controller deployment image
+    (e.g. `netapp/controller:26.06.0`) and returns the tag.
+    Returns "" on failure (cluster unreachable, CLI error).
+    """
+    args = [
+        "get", "deployment", "-n", "trident-protect",
+        "-o", "custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image",
+        "--no-headers",
+    ]
+    try:
+        rc, out, err = oc_run(args, timeout=8, context=context)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        log.warning(f"get_trident_protect_version failed (context={context!r}): {e}")
+        return ""
+    if rc != 0:
+        return ""
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name, image = parts[0], parts[1]
+        if "netapp/controller" in image and ":" in image:
+            return image.rsplit(":", 1)[-1].strip()
+    return ""

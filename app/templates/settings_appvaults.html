@@ -3,7 +3,9 @@
 <div class="card">
   <div class="between mb-1">
     <h2>AppVaults</h2>
+    {% if tp_user and tp_user.role == 'admin' %}
     <button class="btn small" onclick="showAddAppVaultForm()">+ Add AppVault</button>
+    {% endif %}
   </div>
   <p class="text-muted">AppVaults are object storage targets where Trident Protect stores backups and snapshots.</p>
   <div class="table-wrap">

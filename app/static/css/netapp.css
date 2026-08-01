@@ -216,6 +216,7 @@ tr:hover td { background: var(--color-surface); }
   color: var(--color-primary);
 }
 .btn.danger { background: var(--color-error); border-color: var(--color-error); }
+.btn.warning { background: #d97706; border-color: #d97706; color: #fff; }
 .btn.small { padding: 4px 10px; font-size: var(--fs-tiny); }
 
 /* Forms */

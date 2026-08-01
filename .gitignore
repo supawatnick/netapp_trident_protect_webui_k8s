@@ -13,3 +13,4 @@ dist/
 *.egg-info/
 .env
 deploy/
+auth_users.json
