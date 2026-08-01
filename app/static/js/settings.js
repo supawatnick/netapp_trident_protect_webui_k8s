@@ -345,3 +345,30 @@ async function importKubeconfig() {
 }
 
 loadSettings();
+
+async function switchToProfile(name) {
+  try {
+    const res = await tpFetch('/api/settings/switch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+    const r = await res.json();
+    if (r.ok && r.auto_login) {
+      toast(`Switched to ${name} (auto-login)`, 'success');
+    } else if (r.ok && r.needs_reauth) {
+      toast(`Saved token for ${name} is expired or invalid. Please re-authenticate.`, 'error');
+      showLoginForm(name);
+    } else if (r.ok) {
+      toast(`Active: ${name}.`, 'info');
+    } else {
+      toast(r.message, 'error');
+    }
+    if (r.ok) {
+      await loadSettings();
+    }
+  } catch (e) {
+    toast('Switch failed: ' + e.message, 'error');
+  }
+}
+
