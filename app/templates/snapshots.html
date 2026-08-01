@@ -7,7 +7,9 @@
       <h1>Snapshots</h1>
       <div class="subtitle">All snapshot CRs (Kopia + CBS)</div>
     </div>
+    {% if tp_user and tp_user.role == 'admin' %}
     <button class="btn small" onclick="showAddSnapshotModal()">+ Add Snapshot</button>
+    {% endif %}
   </div>
 </div>
 
@@ -28,6 +30,8 @@
           <th>Namespace</th>
           <th>Name</th>
           <th>Application</th>
+          <th>Schedule Source</th>
+          <th>Reclaim Policy</th>
           <th>State</th>
           <th>Created</th>
           <th>Age</th>
@@ -35,7 +39,7 @@
           <th>Actions</th>
         </tr>
       </thead>
-      <tbody id="snapshots-tbody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+      <tbody id="snapshots-tbody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -108,6 +112,7 @@
         <tr><td><b>Reclaim Policy</b></td><td id="vs-reclaim">—</td></tr>
         <tr><td><b>Cleanup Snapshot</b></td><td id="vs-cleanup">—</td></tr>
         <tr><td><b>Replicate Reclaim</b></td><td id="vs-replicate-reclaim">—</td></tr>
+        <tr><td><b>Source Storage Classes</b></td><td id="vs-source-scs" class="text-mono">—</td></tr>
       </tbody>
     </table>
 
@@ -185,21 +190,23 @@ function render() {
       <td>${escapeHtml(s.namespace)}</td>
       <td><b>${escapeHtml(s.name)}</b></td>
       <td>${escapeHtml(s.applicationRef || '—')}</td>
+      <td>${escapeHtml(s.scheduleSource || 'on-demand')}</td>
+      <td>${escapeHtml(s.reclaimPolicy || '—')}</td>
       <td>${stateBadge(s.state)}</td>
       <td>${escapeHtml(s.created)}</td>
       <td>${escapeHtml(s.age)}</td>
       <td class="text-muted">${escapeHtml(s.error || '—')}</td>
       <td>
         <button class="btn small secondary" onclick="viewSnapshot('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">View</button>
-        <button class="btn small secondary" onclick="restoreSnap('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">Restore</button>
-        <button class="btn small danger" onclick="deleteSnap('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">Del</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteSnap('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">Del</button>` : ''}
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="8" class="empty">No matches</td></tr>`;
+  `).join('') || `<tr><td colspan="10" class="empty">No matches</td></tr>`;
 }
 
 // ---- Delete ----
 async function deleteSnap(ns, name) {
+  if (!tpRequireAdmin()) return;
   if (!confirm(`Delete snapshot ${ns}/${name}?`)) return;
   const res = await fetch(`/api/snapshot/${ns}/${name}`, {method:'DELETE'});
   const r = await res.json();
@@ -325,6 +332,7 @@ function getSnapshotYaml() {
   return document.getElementById('snapshot-yaml').value.trim();
 }
 async function validateSnapshotYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getSnapshotYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   try {
@@ -337,6 +345,7 @@ async function validateSnapshotYAML() {
   } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
 }
 async function applySnapshotYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getSnapshotYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   let v;

@@ -7,7 +7,9 @@
       <h1>Backups</h1>
       <div class="subtitle">All backup CRs across namespaces</div>
     </div>
+    {% if tp_user and tp_user.role == 'admin' %}
     <button class="btn small" onclick="showAddBackupModal()">+ Add Backup</button>
+    {% endif %}
   </div>
 </div>
 
@@ -28,6 +30,8 @@
           <th>Namespace</th>
           <th>Name</th>
           <th>Application</th>
+          <th>Schedule Source</th>
+          <th>Reclaim Policy</th>
           <th>State</th>
           <th>Created</th>
           <th>Age</th>
@@ -35,7 +39,7 @@
           <th>Actions</th>
         </tr>
       </thead>
-      <tbody id="backups-tbody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+      <tbody id="backups-tbody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -110,6 +114,7 @@
         <tr><td><b>AppVault</b></td><td id="vb-appvault">—</td></tr>
         <tr><td><b>Reclaim Policy</b></td><td id="vb-reclaim">—</td></tr>
         <tr><td><b>Data Mover</b></td><td id="vb-datamover">—</td></tr>
+        <tr><td><b>Source Storage Classes</b></td><td id="vb-source-scs" class="text-mono">—</td></tr>
       </tbody>
     </table>
 
@@ -186,19 +191,21 @@ function render() {
       <td>${escapeHtml(b.namespace)}</td>
       <td><b>${escapeHtml(b.name)}</b></td>
       <td>${escapeHtml(b.applicationRef || '—')}</td>
+      <td>${escapeHtml(b.scheduleSource || 'on-demand')}</td>
+      <td>${escapeHtml(b.reclaimPolicy || '—')}</td>
       <td>${stateBadge(b.state)}</td>
       <td>${escapeHtml(b.created)}</td>
       <td>${escapeHtml(b.age)}</td>
       <td class="text-muted">${escapeHtml(b.error || '—')}</td>
       <td>
         <button class="btn small secondary" onclick="viewBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">View</button>
-        <button class="btn small secondary" onclick="restoreBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">Restore</button>
-        <button class="btn small danger" onclick="deleteBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">Del</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">Del</button>` : ''}
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="8" class="empty">No matches</td></tr>`;
+  `).join('') || `<tr><td colspan="10" class="empty">No matches</td></tr>`;
 }
 async function deleteBackup(ns, name) {
+  if (!tpRequireAdmin()) return;
   if (!confirm(`Delete backup ${ns}/${name}?\nNote: reclaimPolicy=Retain → data stays in S3`)) return;
   const res = await fetch(`/api/backup/${ns}/${name}`, {method:'DELETE'});
   const r = await res.json();
@@ -328,6 +335,7 @@ function getBackupYaml() {
   return document.getElementById('backup-yaml').value.trim();
 }
 async function validateBackupYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getBackupYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   try {
@@ -340,6 +348,7 @@ async function validateBackupYAML() {
   } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
 }
 async function applyBackupYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getBackupYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   let v;
@@ -408,6 +417,9 @@ function renderViewBackupModal(b, yamlText) {
   document.getElementById('vb-appvault').textContent = sp.appVaultRef || '—';
   document.getElementById('vb-reclaim').textContent = sp.reclaimPolicy || '—';
   document.getElementById('vb-datamover').textContent = sp.dataMover || '—';
+  // Source storage classes: resolved server-side via /api/backup/<ns>/<name>?format=summary
+  const scs = b.sourceStorageClasses || [];
+  document.getElementById('vb-source-scs').textContent = scs.length ? scs.join(', ') : '—';
 
   document.getElementById('vb-state').innerHTML = stateBadge(st.state || 'Unknown');
   document.getElementById('vb-archive-path').textContent = st.appArchivePath || '—';

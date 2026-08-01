@@ -1,6 +1,6 @@
 # NetApp Trident Protect Web UI (Kubernetes Edition)
 
-A comprehensive web-based management interface for **NetApp Trident Protect** resources on **vanilla Kubernetes** clusters. **(v1.4.3 — feature parity with OCP edition)** Manage Applications, Backups, Snapshots, Schedules, and AppVaults with an intuitive GUI — designed for SREs, platform engineers, and storage administrators.
+A comprehensive web-based management interface for **NetApp Trident Protect** resources on **vanilla Kubernetes** clusters. **(v1.4.4 — feature parity with OCP edition)** Manage Applications, Backups, Snapshots, Schedules, and AppVaults with an intuitive GUI — designed for SREs, platform engineers, and storage administrators.
 
 > **This is the Kubernetes-only edition.** For OpenShift, see the separate `netapp_trident_protect_webui_ocp` repository.
 
@@ -34,7 +34,7 @@ A comprehensive web-based management interface for **NetApp Trident Protect** re
 
 ```bash
 # 1. Download the package
-wget https://github.com/supawatnick/netapp_trident_protect_webui_k8s/releases/download/v1.4.3/trident-protect-webui.tar.gz
+wget https://github.com/supawatnick/netapp_trident_protect_webui_k8s/releases/download/v1.4.4/trident-protect-webui.tar.gz
 
 # 2. Extract
 tar xzf trident-protect-webui.tar.gz
@@ -53,8 +53,8 @@ git clone https://github.com/supawatnick/netapp_trident_protect_webui_k8s.git
 # 2. Enter the directory
 cd netapp_trident_protect_webui_k8s
 
-# 3. Checkout the latest stable release (v1.4.3)
-git checkout v1.4.3
+# 3. Checkout the latest stable release (v1.4.4)
+git checkout v1.4.4
 
 # 4. Build the install package (creates dist/trident-protect-webui.tar.gz)
 ./make-package.sh
@@ -69,7 +69,7 @@ sudo ./install.sh
 #### Clone a specific version (one command)
 
 ```bash
-git clone -b v1.4.3 https://github.com/supawatnick/netapp_trident_protect_webui_k8s.git
+git clone -b v1.4.4 https://github.com/supawatnick/netapp_trident_protect_webui_k8s.git
 cd netapp_trident_protect_webui_k8s
 ```
 
@@ -83,7 +83,7 @@ Or after cloning:
 
 ```bash
 git tag -l
-git checkout v1.4.3
+git checkout v1.4.4
 ```
 
 ---

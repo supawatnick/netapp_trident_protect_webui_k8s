@@ -7,7 +7,9 @@
       <h1>Applications</h1>
       <div class="subtitle">Protected applications and their protection state</div>
     </div>
+    {% if tp_user and tp_user.role == 'admin' %}
     <button class="btn small" onclick="showAddAppModal()">+ Add Application</button>
+    {% endif %}
   </div>
 </div>
 
@@ -170,6 +172,7 @@ async function loadApps() {
   render();
 }
 async function deleteApplication(ns, name) {
+  if (!tpRequireAdmin()) return;
   if (!confirm(`Delete application ${ns}/${name}?\nThis will remove the Application CR.`)) return;
   try {
     const res = await fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`, {method:'DELETE'});
@@ -199,7 +202,7 @@ function render() {
       <td>${escapeHtml(a.age)}</td>
       <td>
         <button class="btn small secondary" onclick="viewApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">View</button>
-        <button class="btn small danger" onclick="deleteApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">Del</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">Del</button>` : ''}
       </td>
     </tr>
   `).join('') || `<tr><td colspan="9" class="empty">No matches</td></tr>`;
@@ -294,6 +297,7 @@ function getAppYaml() {
 }
 
 async function validateAppYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getAppYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   try {
@@ -306,6 +310,7 @@ async function validateAppYAML() {
   } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
 }
 async function applyAppYAML() {
+  if (!tpRequireAdmin()) return;
   const yaml = getAppYaml();
   if (!yaml) { showAddMsg('YAML required', 'error'); return; }
   let v;

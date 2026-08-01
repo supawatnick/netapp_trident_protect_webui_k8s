@@ -53,26 +53,42 @@ function renderProfiles() {
     const p = currentProfiles[name];
     const isActive = name === currentActive;
     const isAdminUser = isAdmin();
+    const hasToken = !!p.token;
 
-    // For k8s: Switch button when not active, Login & Switch for token-based profile setup.
-    const actions = (
-      (isActive
-        ? '<span class="badge success">In use</span>'
-        : `<button class="btn small" onclick="showLoginForm('${escapeHtml(name)}')">Login &amp; Switch</button>`)
+    // Buttons (match 105):
+    //  - Active: "In use" badge only.
+    //  - Inactive + has stored token: "Switch" (one-click, auto-login)
+    //    + "Login" (re-auth / replace token, in case saved one expired).
+    //  - Inactive + no token: "Login & Switch" (paste token).
+    let switchBtn;
+    if (isActive) {
+      switchBtn = '<span class="badge success">In use</span>';
+    } else if (hasToken) {
+      switchBtn = `<button class="btn small" onclick="switchToProfile('${escapeHtml(name)}')">Switch</button>` +
+                  ` <button class="btn small secondary" onclick="showLoginForm('${escapeHtml(name)}')" title="Re-authenticate with a new bearer token (saved token may be expired)">Login</button>`;
+    } else {
+      switchBtn = `<button class="btn small" onclick="showLoginForm('${escapeHtml(name)}')">Login &amp; Switch</button>`;
+    }
+    const statusBadge = isActive
+      ? '<span class="badge success">In use</span>'
+      : (hasToken
+          ? '<span class="badge pending">Standby (token saved)</span>'
+          : '<span class="badge pending">Standby</span>');
+
+    const actions = switchBtn
       + (isAdminUser
         ? ` <button class="btn small secondary" onclick="editProfile('${escapeHtml(name)}')">Edit</button>`
         : '')
       + (isAdminUser
         ? ` <button class="btn small danger" onclick="deleteProfile('${escapeHtml(name)}')"${isActive ? ' disabled' : ''}>Del</button>`
-        : '')
-    );
+        : '');
 
     return `
       <tr${isActive ? ' style="background:#fffbea"' : ''}>
         <td><b>${escapeHtml(name)}</b>${isActive ? ' <span class="badge protected">ACTIVE</span>' : ''}</td>
         <td class="text-mono">${escapeHtml(p.api_url || '')}</td>
-        <td>${escapeHtml(p.appvault || 'ontap-s3-appvault')}/${escapeHtml(p.appvault_namespace || 'trident-protect')}</td>
         <td class="text-muted">${escapeHtml(p.description || '—')}</td>
+        <td>${statusBadge}</td>
         <td>${actions}</td>
       </tr>
     `;

@@ -201,7 +201,49 @@ def serialize_application(app: dict) -> dict:
     }
 
 
-def serialize_backup(b: dict) -> dict:
+
+
+def _resolve_schedule_source(
+    name: str,
+    labels: dict,
+    schedule_map: dict | None,
+) -> str:
+    """Classify how a Backup/Snapshot was created.
+
+    Returns:
+      - schedule name (e.g. "schedule-amr-stateless") if created by a known Schedule
+      - "reverse-bootstrap" if the resource is a reverse-direction bootstrap snapshot
+      - "on-demand" if created manually
+      - "" (empty) if created by a Schedule that no longer exists (UID not resolvable)
+    """
+    if name.startswith("reverse-bootstrap-"):
+        return "reverse-bootstrap"
+    schedule_uid = (labels or {}).get("created-by-trident-protect-schedule-uid", "")
+    if schedule_uid:
+        if schedule_map and schedule_uid in schedule_map:
+            return schedule_map[schedule_uid]
+        return ""
+    return "on-demand"
+
+
+def _derive_schedule_map(schedules: list[dict] | None = None) -> dict[str, str]:
+    """Build a UID -> schedule-name map for use by _resolve_schedule_source.
+
+    Fetches schedules via _list("schedule", context=None) if not provided.
+    """
+    if schedules is None:
+        try:
+            schedules = _list("schedule")
+        except Exception:
+            return {}
+    out: dict[str, str] = {}
+    for s in schedules or []:
+        uid = (s.get("metadata", {}) or {}).get("uid", "")
+        name = (s.get("metadata", {}) or {}).get("name", "")
+        if uid and name:
+            out[uid] = name
+    return out
+def serialize_backup(b: dict, context: str | None = None, schedule_map: dict | None = None) -> dict:
     md = b.get("metadata", {})
     sp = b.get("spec", {})
     st = b.get("status", {})
@@ -212,15 +254,20 @@ def serialize_backup(b: dict) -> dict:
         "age": _age(md.get("creationTimestamp")),
         "applicationRef": sp.get("applicationRef"),
         "appVaultRef": sp.get("appVaultRef"),
+        "reclaimPolicy": sp.get("reclaimPolicy"),
         "state": st.get("state", "Unknown"),
         "stateClass": _state_class(st.get("state")),
         "appArchivePath": st.get("appArchivePath"),
         "error": st.get("error"),
         "completionTime": _fmt_time(st.get("completionTimestamp")),
+        "scheduleSource": _resolve_schedule_source(
+            md.get("name", ""), md.get("labels", {}) or {}, schedule_map
+        ),
+        "sourceStorageClasses": [],  # see get_source_storageclasses() — only resolved on view (per-CR)
     }
 
 
-def serialize_snapshot(s: dict) -> dict:
+def serialize_snapshot(s: dict, context: str | None = None, schedule_map: dict | None = None) -> dict:
     md = s.get("metadata", {})
     sp = s.get("spec", {})
     st = s.get("status", {})
@@ -231,10 +278,15 @@ def serialize_snapshot(s: dict) -> dict:
         "age": _age(md.get("creationTimestamp")),
         "applicationRef": sp.get("applicationRef"),
         "appVaultRef": sp.get("appVaultRef"),
+        "reclaimPolicy": sp.get("reclaimPolicy"),
         "state": st.get("state", "Unknown"),
         "stateClass": _state_class(st.get("state")),
         "appArchivePath": st.get("appArchivePath"),
         "error": st.get("error"),
+        "scheduleSource": _resolve_schedule_source(
+            md.get("name", ""), md.get("labels", {}) or {}, schedule_map
+        ),
+        "sourceStorageClasses": [],  # only resolved on view (per-CR)
     }
 
 
@@ -262,6 +314,48 @@ def serialize_schedule(s: dict) -> dict:
 
 # --- List API ---
 
+
+
+def get_source_storageclasses(kind: str, namespace: str, name: str, context: str | None = None) -> list[str]:
+    """Discover StorageClass(es) used when the named Backup/Snapshot was created.
+
+    Walks: CR.status → VolumeSnapshot.spec.source.persistentVolumeClaimName
+        → live PVC.spec.storageClassName.
+
+    Returns sorted unique list. Empty list if lookup fails.
+    """
+    if context is None or not namespace or not name or kind not in ("Backup", "Snapshot"):
+        return []
+    resource = "backup" if kind == "Backup" else "snapshot"
+    cr = _get(resource, name, namespace, context=context)
+    if not cr:
+        return []
+    sc_set: set[str] = set()
+    # Walk status for VolumeSnapshot / PVC references
+    for ref in (cr.get("status", {}) or {}).get("volumeSnapshots", []) or []:
+        vs_name = ref.get("name") or ref.get("volumeSnapshotName")
+        if not vs_name:
+            continue
+        vs_obj = _get("volumesnapshot", vs_name, namespace, context=context)
+        if not vs_obj:
+            continue
+        pvc_name = ((vs_obj.get("spec") or {}).get("source") or {}).get("persistentVolumeClaimName")
+        if not pvc_name:
+            continue
+        pvc_obj = _get("pvc", pvc_name, namespace, context=context)
+        if pvc_obj:
+            sc = (pvc_obj.get("spec", {}) or {}).get("storageClassName")
+            if sc:
+                sc_set.add(sc)
+    # Also try volumesnapshotcontent (if direct bind)
+    if not sc_set:
+        for vsc in _list("volumesnapshotcontent", context=context):
+            spec = vsc.get("spec", {}) or {}
+            src = spec.get("source", {}) or {}
+            if src.get("persistentVolumeClaimName") and not src.get("volumeHandle"):
+                # skip direct-bind
+                pass
+    return sorted(sc_set)
 def get_active_appvault() -> tuple[str, str]:
     """Return (appvault_name, appvault_namespace) from active profile or legacy config."""
     from .config import Config
@@ -345,10 +439,16 @@ def oc_login_with_token(api_url: str, token: str, insecure: bool = True) -> tupl
             return True, (out or "Login successful").strip()
         return False, (err or out).strip()
     elif platform == "k8s":
-        # Manually write kubeconfig via kubectl config subcommands
-        import uuid
-        cluster_name = f"webui-cluster-{uuid.uuid4().hex[:8]}"
-        user_name = f"webui-user-{uuid.uuid4().hex[:8]}"
+        # Manually write kubeconfig via kubectl config subcommands.
+        # Use a STABLE cluster/user/context name derived from the api_url host
+        # (e.g. "webui@webui-clus1-10-10-10-41") so subsequent logins for the
+        # same cluster overwrite the same entry instead of accumulating
+        # stale "webui-cluster-<random>" entries. find_kubecontext_for_api()
+        # can then resolve the context reliably.
+        from urllib.parse import urlparse
+        host = (urlparse(api_url).hostname or "cluster").replace(".", "-")
+        cluster_name = f"webui-{host}"
+        user_name = f"webui-user-{host}"
         context_name = f"webui@{cluster_name}"
         steps = [
             ["config", "set-cluster", cluster_name, f"--server={api_url}"]
@@ -361,7 +461,7 @@ def oc_login_with_token(api_url: str, token: str, insecure: bool = True) -> tupl
             rc, out, err = oc_run(step, timeout=15)
             if rc != 0:
                 return False, (err or out or f"kubectl {step[0]} failed").strip()
-        return True, f"Logged in to {api_url}"
+        return True, f"Logged in to {api_url} (context: {context_name})"
     else:
         return False, "No oc or kubectl binary available"
 
@@ -573,11 +673,15 @@ def list_applications(namespace: str | None = None, context: str | None = None) 
 
 
 def list_backups(namespace: str | None = None, context: str | None = None) -> list[dict]:
-    return [serialize_backup(b) for b in _list("backup", namespace or "", context=context)]
+    items = _list("backup", namespace or "", context=context)
+    sched_map = _derive_schedule_map() if items else {}
+    return [serialize_backup(b, context=context, schedule_map=sched_map) for b in items]
 
 
 def list_snapshots(namespace: str | None = None, context: str | None = None) -> list[dict]:
-    return [serialize_snapshot(s) for s in _list("snapshot", namespace or "", context=context)]
+    items = _list("snapshot", namespace or "", context=context)
+    sched_map = _derive_schedule_map() if items else {}
+    return [serialize_snapshot(s, context=context, schedule_map=sched_map) for s in items]
 
 
 def list_schedules(context: str | None = None) -> list[dict]:

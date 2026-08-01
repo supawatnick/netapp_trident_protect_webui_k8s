@@ -810,6 +810,19 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/settings/switch", methods=["POST"])
     def api_switch_profile():
+        """Switch active cluster profile + auto-login using saved token (port 105).
+
+        Order:
+          1. If the profile has a stored token, call `oc_login_with_token`
+             automatically (writes a stable kubeconfig entry, re-uses the
+             same cluster/user/context name as the first login). On success
+             return {auto_login: true}.
+          2. If the profile has a `kubeconfig_context` and the token login
+             already succeeded, switch the active context to it.
+          3. If the token is missing or the re-login failed, return
+             {auto_login: false, needs_reauth: true} so the UI shows a
+             "Login" button instead of looping on a failing Switch.
+        """
         body = request.get_json() or {}
         name = body.get("name", "").strip()
         if not name:
@@ -823,25 +836,56 @@ def register_routes(app: Flask) -> None:
         cfg.save()
         _invalidate_trident_version_cache()
 
-        # If the profile has a kubeconfig_context, switch the active context
+        api_url = profile["api_url"]
+        insecure = profile.get("insecure_skip_tls", True)
+        stored_token = profile.get("token", "").strip()
         ctx = profile.get("kubeconfig_context", "")
+
+        if stored_token:
+            ok, msg = trident_protect.oc_login_with_token(api_url, stored_token, insecure)
+            if ok:
+                # Re-discover kubeconfig_context if missing (legacy profiles)
+                if not ctx:
+                    ctx_name = trident_protect.find_kubecontext_for_api(api_url)
+                    if ctx_name:
+                        profile["kubeconfig_context"] = ctx_name
+                        cfg.save()
+                return jsonify({
+                    "ok": True,
+                    "message": f"Switched to '{name}' and authenticated. Data now shows cluster '{name}'.",
+                    "auto_login": True,
+                })
+            # Token may be expired or invalid
+            return jsonify({
+                "ok": True,
+                "auto_login": False,
+                "needs_reauth": True,
+                "message": f"Switched to '{name}' but saved token is invalid or expired ({msg}). Click 'Login' to re-authenticate.",
+            })
+
         if ctx:
-            rc, out, err = trident_protect.oc_run(
-                ["config", "use-context", ctx]
-            )
+            # No stored token — just switch the active context (works if the
+            # kubeconfig is already on disk and a previous login set the entry).
+            rc, out, err = trident_protect.oc_run(["config", "use-context", ctx])
             if rc == 0:
                 return jsonify({
                     "ok": True,
-                    "message": f"Switched to '{name}' (kubeconfig context: {ctx}). Data now shows cluster '{name}'.",
+                    "message": f"Switched to '{name}' (kubeconfig context: {ctx}).",
+                    "auto_login": False,
+                    "needs_reauth": False,
                 })
             return jsonify({
                 "ok": True,
-                "message": f"Active profile set to '{name}' but could not switch context: {err or out}",
+                "auto_login": False,
+                "needs_reauth": True,
+                "message": f"Could not switch context: {err or out}. Click 'Login' to re-authenticate.",
             })
 
         return jsonify({
             "ok": True,
-            "message": f"Active profile set to '{name}'.",
+            "auto_login": False,
+            "needs_reauth": True,
+            "message": f"Active profile set to '{name}'. Use 'Login & Switch' to authenticate.",
         })
 
     @app.route("/api/settings/login", methods=["POST"])

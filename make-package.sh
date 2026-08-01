@@ -1,13 +1,13 @@
 #!/bin/bash
 # Build the Trident Protect Web UI installation package (tar.gz)
-# Kubernetes Edition · v1.4.3
+# Kubernetes Edition · v1.4.4
 # Excludes: the large CLI binary, runtime artifacts, secrets
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-UI_VERSION="1.4.3"
+UI_VERSION="1.4.4"
 PACKAGE_NAME="trident-protect-webui-v${UI_VERSION}"
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
 OUTPUT_FILE="${OUTPUT_DIR}/${PACKAGE_NAME}.tar.gz"

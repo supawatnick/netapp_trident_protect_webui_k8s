@@ -34,7 +34,11 @@
 </div>
 
 <div style="margin:16px 0">
+  {% if tp_user and tp_user.role == 'admin' %}
   <button class="btn" id="btn-restore" onclick="doRestore()" disabled>Restore Selected</button>
+  {% else %}
+  <button class="btn" id="btn-restore" disabled title="Readonly role cannot restore">Restore Selected</button>
+  {% endif %}
   <span id="restore-msg" style="margin-left:12px;color:#666"></span>
 </div>
 
