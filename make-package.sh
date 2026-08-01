@@ -1,23 +1,23 @@
 #!/bin/bash
 # Build the Trident Protect Web UI installation package (tar.gz)
+# Kubernetes Edition · v1.4.3
 # Excludes: the large CLI binary, runtime artifacts, secrets
-
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-CLI_VERSION="26.02.0"
-PACKAGE_NAME="trident-protect-webui-v${CLI_VERSION}"
+UI_VERSION="1.4.3"
+PACKAGE_NAME="trident-protect-webui-v${UI_VERSION}"
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
 OUTPUT_FILE="${OUTPUT_DIR}/${PACKAGE_NAME}.tar.gz"
 
 # --- Pre-flight checks ---
-echo "=== Trident Protect Web UI — Package Builder ==="
+echo "=== Trident Protect Web UI — Package Builder (Kubernetes Edition · v${UI_VERSION}) ==="
 echo ""
 
 if [ ! -d app ] || [ ! -f install.sh ] || [ ! -f requirements.txt ]; then
-    echo "ERROR: Must be run from the web/ directory"
+    echo "ERROR: Must be run from the repo root (containing app/, install.sh, requirements.txt)"
     exit 1
 fi
 
@@ -35,7 +35,6 @@ mkdir -p "$STAGING"
 echo "Staging files..."
 
 # Application source (Python + templates + static)
-# Exclude __pycache__ and other runtime artifacts
 rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='*.pyo' app "$STAGING/"
 echo "  ✓ app/"
 
@@ -58,14 +57,19 @@ mkdir -p "$STAGING/systemd"
 cp systemd/trident-protect-webui.service "$STAGING/systemd/"
 echo "  ✓ systemd/trident-protect-webui.service"
 
+# Release notes + changelog
+[ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGING/" && echo "  ✓ CHANGELOG.md"
+
 # Make scripts executable
 chmod +x "$STAGING/install.sh" "$STAGING/run.sh" "$STAGING/stop.sh"
 
-# Create README for the package
+# --- Create README for the package ---
 cat > "$STAGING/README.md" <<'EOF'
-# Trident Protect Web UI
+# Trident Protect Web UI (Kubernetes Edition)
 
-Web UI for managing Trident Protect resources (Applications, Backups, Snapshots, Schedules, Restores, AppVaults) on OpenShift / Kubernetes clusters.
+Web UI for managing **NetApp Trident Protect** resources (Applications, Backups, Snapshots, Schedules, Restores, AppVaults, Disaster Recovery) on **vanilla Kubernetes** clusters.
+
+> **This is the Kubernetes-only edition.** For OpenShift, see the separate `netapp_trident_protect_webui_ocp` repository.
 
 ## Quick Install
 
@@ -76,16 +80,15 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Check prerequisites (Python 3.9+, pip, curl, oc/kubectl)
+1. Check prerequisites (Python 3.9+, pip, curl, kubectl)
 2. Set up directories
 3. Create a Python virtual environment
-4. Install Python dependencies
+4. Install Python dependencies (Flask, PyYAML, ldap3)
 5. Download `tridentprotect-ctl` CLI from GitHub
-6. Configure cluster connection (interactive)
-7. Set up authentication (interactive)
-8. Install systemd service
-9. Configure firewall (open port 8080)
-10. Verify installation
+6. Generate `config.yaml` (cluster profiles added later via the UI)
+7. Install systemd service
+8. Configure firewall (open port 8080)
+9. Verify installation
 
 ## After Install
 
@@ -99,13 +102,31 @@ The installer will:
 | Manual start | `./run.sh` |
 | Manual stop | `./stop.sh` |
 
+## First Login
+
+The dashboard auth is enabled by default and seeds an `admin` user with password `admin123` on first run. **Change this immediately** via Settings → Credentials after logging in.
+
+Manage additional local users and LDAP under **Settings → Credentials** (admin only).
+
+## Register Your First Kubernetes Cluster
+
+1. Sign in as `admin`.
+2. Open **Settings → Clusters**.
+3. Click **+ Add Profile**, enter Profile Name + API URL.
+4. Click **Save Profile**.
+5. Click **Login & Switch** on the new profile row.
+6. Paste a bearer token (e.g. from `kubectl -n kube-system create token k8s-ui-sa --duration=87600h`).
+7. Click **Login & Switch** again — the token is stored, the active profile switches automatically.
+
+**Alternative:** use **Import Kubeconfig** to paste/upload a kubeconfig file. A profile is auto-created from `current-context`.
+
 ## Requirements
 
 - **OS:** Ubuntu 20.04+ / Debian 11+ (other Linux distros work with minor tweaks)
 - **Python:** 3.9 or higher
 - **Internet:** Required during install (to download CLI binary + Python deps)
-- **OpenShift client (oc):** Required for token-based login + cluster queries
-  - Download: https://mirror.openshift.com/pub/openshift-v4/clients/oc/
+- **kubectl:** Required for cluster queries + kubeconfig management
+  - Install: https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
 - **Trident Protect:** Must be installed on the target cluster (operator + CRDs)
 - **AppVault:** Object storage target (ONTAP S3, AWS S3, MinIO, etc.)
 
@@ -116,31 +137,11 @@ Edit `config.yaml` after install to customize:
 - **app:** host/port/secret_key
 - **cli:** path to `tridentprotect-ctl`
 - **appvault:** default backup/snapshot storage
-- **clusters:** profiles (API URL, AppVault, TLS settings)
+- **clusters:** profiles (API URL, AppVault, TLS settings, token, kubeconfig_context)
+- **auth:** enable/disable dashboard login, default role, LDAP config
+- **logs:** audit log enable/max_rows
 
-You can manage multiple clusters via the **Settings → Clusters** page in the UI.
-
-## Architecture
-
-```
-trident-protect-webui/
-├── install.sh            # Single-file installer
-├── run.sh                # Manual start
-├── stop.sh               # Manual stop
-├── config.example.yaml   # Config template
-├── requirements.txt      # flask, PyYAML
-├── app/                  # Flask backend
-│   ├── main.py          # Routes
-│   ├── config.py        # Config loader
-│   ├── trident_protect.py # CLI wrapper
-│   ├── templates/       # HTML pages
-│   └── static/          # CSS + JS
-├── systemd/
-│   └── trident-protect-webui.service
-├── bin/
-│   └── tridentprotect-ctl  # Downloaded by installer
-└── .venv/               # Created by installer
-```
+You can manage multiple clusters via the **Settings → Clusters** page in the UI. The DR page requires exactly 2 profiles (source + destination).
 
 ## License
 
@@ -154,6 +155,7 @@ cat > "$STAGING/.gitignore" <<'EOF'
 .venv/
 bin/
 config.yaml
+auth_users.json
 logs/
 *.log
 .web.pid
