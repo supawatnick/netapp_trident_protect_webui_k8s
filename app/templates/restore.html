@@ -28,8 +28,17 @@
   <h2>Destination</h2>
   <div class="filters">
     <label><span>Namespace</span><select id="dest-ns"></select></label>
-    <label><span>StorageClass</span><select id="dest-sc"></select></label>
     <label><span>App Name</span><input id="dest-app" placeholder="auto-fill from source" /></label>
+  </div>
+  <div id="sc-mapping-section" style="margin-top:12px;display:none">
+    <h4 style="margin:0 0 8px 0;font-size:13px">StorageClass Mapping</h4>
+    <div id="sc-mapping-rows"></div>
+    <div id="sc-mapping-status" style="margin-top:8px;font-size:12px;color:#999"></div>
+  </div>
+  <div style="margin-top:12px">
+    <label><span>Default StorageClass <span class="text-muted">(used when source SC is Unknown)</span></span>
+      <select id="dest-sc"></select>
+    </label>
   </div>
 </div>
 
@@ -69,8 +78,8 @@ let allBackups = [], allSnapshots = [], destNsList = [], destScList = [];
 
 async function load() {
   const [srcRes, destRes] = await Promise.all([
-    fetch('/api/restore/sources'),
-    fetch('/api/restore/destinations'),
+    tpFetch('/api/restore/sources'),
+    tpFetch('/api/restore/destinations'),
   ]);
   const src = await srcRes.json();
   const dest = await destRes.json();
@@ -123,18 +132,22 @@ function filterItems() {
     + '<th style="padding:6px 8px">Namespace</th>'
     + '<th style="padding:6px 8px">App</th>'
     + '<th style="padding:6px 8px">State</th>'
-    + '<th style="padding:6px 8px">Age</th></tr>';
+    + '<th style="padding:6px 8px">Created</th>'
+    + '<th style="padding:6px 8px">Source SC</th></tr>';
   const sorted = items.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
   for (const item of sorted) {
     const stateBadge = item.stateClass === 'success' ? '🟢'
       : item.stateClass === 'error' ? '🔴' : '🟡';
+    const scs = item.sourceStorageClasses || [];
+    const scText = scs.length ? scs.join(', ') : '<span style="color:#999">Unknown</span>';
     html += `<tr style="border-bottom:1px solid #222;cursor:pointer" onclick="toggleItem(this)" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}">
-      <td style="padding:6px 8px"><input type="checkbox" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="updateRestoreBtn()" /></td>
+      <td style="padding:6px 8px"><input type="radio" name="restore-item" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="updateRestoreBtn()" /></td>
       <td style="padding:6px 8px;font-family:monospace">${item.name}</td>
       <td style="padding:6px 8px">${item.namespace}</td>
       <td style="padding:6px 8px">${item.applicationRef||'-'}</td>
       <td style="padding:6px 8px">${stateBadge} ${item.state}</td>
-      <td style="padding:6px 8px;color:#999">${item.age}</td>
+      <td style="padding:6px 8px;color:#999">${item.created}</td>
+      <td style="padding:6px 8px;font-family:monospace;font-size:12px">${scText}</td>
     </tr>`;
   }
   html += '</table>';
@@ -148,113 +161,219 @@ function toggleItem(row) {
 }
 
 function updateRestoreBtn() {
-  const cbs = document.querySelectorAll('.item-cb:checked');
+  const cb = document.querySelector('.item-cb:checked');
   const btn = document.getElementById('btn-restore');
-  btn.disabled = cbs.length === 0;
-  if (cbs.length > 0) {
-    const firstApp = cbs[0].dataset.app;
+  btn.disabled = !cb;
+  if (cb) {
+    const firstApp = cb.dataset.app;
     if (firstApp && !document.getElementById('dest-app').value) {
       document.getElementById('dest-app').value = firstApp;
     }
   }
-  document.getElementById('restore-msg').textContent = cbs.length > 0
-    ? `${cbs.length} item(s) selected` : '';
+  document.getElementById('restore-msg').textContent = cb
+    ? `1 item selected: ${cb.dataset.name}` : '';
+  rebuildScMapping();
 }
 
-async function doRestore() {
+function getSelectedItems() {
   const cbs = document.querySelectorAll('.item-cb:checked');
-  if (!cbs.length) return;
-  const destNs = document.getElementById('dest-ns').value;
-  const destSc = document.getElementById('dest-sc').value;
-  const destApp = document.getElementById('dest-app').value.trim();
-  if (!destNs) { toast('Select destination namespace', 'error'); return; }
-
-  const results = [];
+  const items = [];
   for (const cb of cbs) {
-    const type = cb.dataset.type;
     const ns = cb.dataset.ns;
     const name = cb.dataset.name;
-    const endpoint = type === 'Backup'
-      ? `/api/backup/${ns}/${name}/backuprestores`
-      : `/api/snapshot/${ns}/${name}/snapshotrestores`;
-    const body = { destination_namespace: destNs };
-    if (destSc) body.storageclassMapping = `a400-nfs:${destSc}`;
-    if (destApp) body.destinationApplicationName = destApp;
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(body),
-      });
-      const r = await res.json();
-      results.push({name, type, ok: r.ok, message: r.message});
-    } catch(e) {
-      results.push({name, type, ok: false, message: e.message});
+    const type = cb.dataset.type;
+    const src = (type === 'Backup' ? allBackups : allSnapshots).find(x => x.namespace === ns && x.name === name);
+    if (src) items.push(src);
+  }
+  return items;
+}
+
+function rebuildScMapping() {
+  const selected = getSelectedItems();
+  const destScList = Array.from(document.getElementById('dest-sc').options).map(o => o.value);
+  const section = document.getElementById('sc-mapping-section');
+  const rows = document.getElementById('sc-mapping-rows');
+  const status = document.getElementById('sc-mapping-status');
+
+  if (!selected.length) {
+    section.style.display = 'none';
+    rows.innerHTML = '';
+    status.textContent = '';
+    return;
+  }
+
+  const scSet = new Set();
+  let unknownCount = 0;
+  for (const item of selected) {
+    const scs = item.sourceStorageClasses || [];
+    if (scs.length === 0) {
+      unknownCount += 1;
+    } else {
+      for (const sc of scs) scSet.add(sc);
     }
   }
 
-  const ok = results.filter(r => r.ok).length;
-  const fail = results.length - ok;
-  let msg = `${ok} restore(s) triggered`;
-  if (fail) msg += `, ${fail} failed`;
-  toast(msg, fail ? 'warning' : 'success');
-  document.getElementById('restore-msg').textContent = msg;
+  if (scSet.size === 0) {
+    section.style.display = 'none';
+    status.textContent = `⚠ All ${unknownCount} selected item(s) have unknown source SC — will use Default StorageClass.`;
+    status.style.color = '#f59e0b';
+    return;
+  }
+
+  section.style.display = '';
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html += '<tr style="color:#999;text-align:left;border-bottom:1px solid #333">'
+    + '<th style="padding:4px 8px">Source SC</th>'
+    + '<th style="padding:4px 8px;width:24px"></th>'
+    + '<th style="padding:4px 8px">Destination SC</th></tr>';
+  const sorted = Array.from(scSet).sort();
+  for (const srcSc of sorted) {
+    html += `<tr style="border-bottom:1px solid #222">
+      <td style="padding:6px 8px;font-family:monospace">${srcSc}</td>
+      <td style="padding:6px 8px;color:#999">→</td>
+      <td style="padding:6px 8px">
+        <select class="sc-map-dest" data-src="${srcSc}" style="padding:3px 6px">
+          ${destScList.map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>
+        <span class="sc-map-note" style="margin-left:8px;font-size:11px;color:#999"></span>
+      </td>
+    </tr>`;
+  }
+  html += '</table>';
+  rows.innerHTML = html;
+  refreshMappingStatus();
+}
+
+function refreshMappingStatus() {
+  const status = document.getElementById('sc-mapping-status');
+  const selected = document.querySelectorAll('.sc-map-dest');
+  if (!selected.length) { status.textContent = ''; return; }
+  let needed = [];
+  let skipped = [];
+  for (const sel of selected) {
+    const src = sel.dataset.src;
+    const dest = sel.value;
+    if (src === dest) skipped.push(src);
+    else needed.push(`${src} → ${dest}`);
+  }
+  if (needed.length === 0) {
+    status.textContent = `✓ No SC mapping needed (${skipped.length} source SC(s) match destination).`;
+    status.style.color = '#22c55e';
+  } else {
+    status.textContent = `⚠ Mapping required: ${needed.join(', ')}`;
+    status.style.color = '#f59e0b';
+  }
+}
+
+document.getElementById('sc-mapping-rows').addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('sc-map-dest')) {
+    refreshMappingStatus();
+  }
+});
+
+async function doRestore() {
+  if (!tpRequireAdmin()) return;
+  const cb = document.querySelector('.item-cb:checked');
+  if (!cb) return;
+  const destNs = document.getElementById('dest-ns').value;
+  const destScDefault = document.getElementById('dest-sc').value;
+  const destApp = document.getElementById('dest-app').value.trim();
+  if (!destNs) { toast('Select destination namespace', 'error'); return; }
+
+  const mapSels = document.querySelectorAll('.sc-map-dest');
+  const mappingParts = [];
+  for (const sel of mapSels) {
+    const src = sel.dataset.src;
+    const dest = sel.value;
+    if (src && dest && src !== dest) {
+      mappingParts.push(`${src}:${dest}`);
+    }
+  }
+  const storageclassMapping = mappingParts.length ? Array.from(new Set(mappingParts)).join(',') : '';
+
+  const type = cb.dataset.type;
+  const ns = cb.dataset.ns;
+  const name = cb.dataset.name;
+  const endpoint = type === 'Backup'
+    ? `/api/backup/${ns}/${name}/backuprestores`
+    : `/api/snapshot/${ns}/${name}/snapshotrestores`;
+  const body = { destination_namespace: destNs };
+  if (storageclassMapping) body.storageclassMapping = storageclassMapping;
+  if (destApp) body.destinationApplicationName = destApp;
+  if (!storageclassMapping && destScDefault) body.storageclassMapping = `${destScDefault}:${destScDefault}`;
+
+  let ok = false, message = '';
+  try {
+    const res = await tpFetch(endpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const r = await res.json();
+    ok = r.ok;
+    message = r.message;
+  } catch(e) {
+    message = e.message;
+  }
+
+  toast(ok ? `Restore triggered: ${name}` : `Failed: ${message}`, ok ? 'success' : 'error');
+  document.getElementById('restore-msg').textContent = ok ? `Restore triggered: ${name}` : `Failed: ${message}`;
   loadHistory();
-  // Auto-refresh while running
   setTimeout(loadHistory, 3000);
   setTimeout(loadHistory, 8000);
   setTimeout(loadHistory, 15000);
 }
 
 async function loadHistory() {
-  const res = await fetch('/api/restores');
-  const data = await res.json();
-  const items = data.items || [];
-  const el = document.getElementById('history-table');
-  const empty = document.getElementById('history-empty');
-  if (!items.length) {
-    el.innerHTML = '';
-    empty.style.display = '';
-    return;
-  }
-  empty.style.display = 'none';
-  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px">';
-  html += '<tr style="border-bottom:1px solid #333;color:#999;text-align:left">'
-    + '<th style="padding:6px 8px">Type</th>'
-    + '<th style="padding:6px 8px">Name</th>'
-    + '<th style="padding:6px 8px">Source</th>'
-    + '<th style="padding:6px 8px">Dest NS</th>'
-    + '<th style="padding:6px 8px">State</th>'
-    + '<th style="padding:6px 8px">Age</th>'
-    + '<th style="padding:6px 8px">Actions</th></tr>';
-  for (const r of items) {
-    const stateBadge = r.stateClass === 'success' ? '🟢'
-      : r.stateClass === 'error' ? '🔴' : '🟡';
-    const typeColor = r.type === 'BackupRestore' ? '#60a5fa' : '#a78bfa';
-    html += `<tr style="border-bottom:1px solid #222">`
-      + `<td style="padding:6px 8px"><span style="color:${typeColor}">${r.type}</span></td>`
-      + `<td style="padding:6px 8px;font-family:monospace">${r.name}</td>`
-      + `<td style="padding:6px 8px">${r.sourceRef||'-'}</td>`
-      + `<td style="padding:6px 8px">${r.destinationNamespace||'-'}</td>`
-      + `<td style="padding:6px 8px">${stateBadge} ${r.state}</td>`
-      + `<td style="padding:6px 8px;color:#999">${r.age}</td>`
-      + `<td style="padding:6px 8px">`
-      + `<button class="btn btn-secondary" style="font-size:11px;padding:2px 8px;margin-right:4px" onclick="viewRestore('${r.type}','${r.namespace}','${r.name}')">View</button>`
-      + `<button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteRestore('${r.type}','${r.namespace}','${r.name}')">Del</button>`
-      + `</td></tr>`;
-    if (r.error) {
-      html += `<tr style="border-bottom:1px solid #222"><td colspan="7" style="padding:4px 8px 8px;color:#f87171;font-size:12px">⚠ ${r.error}</td></tr>`;
+  try {
+    const res = await tpFetch('/api/restores');
+    const data = await res.json();
+    const items = data.items || [];
+    const el = document.getElementById('history-table');
+    const empty = document.getElementById('history-empty');
+    if (!items.length) {
+      el.innerHTML = '';
+      empty.style.display = '';
+      return;
     }
-  }
-  html += '</table>';
-  el.innerHTML = html;
+    empty.style.display = 'none';
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    html += '<tr style="border-bottom:1px solid #333;color:#999;text-align:left">'
+      + '<th style="padding:6px 8px">Type</th>'
+      + '<th style="padding:6px 8px">Name</th>'
+      + '<th style="padding:6px 8px">Source</th>'
+      + '<th style="padding:6px 8px">Dest NS</th>'
+      + '<th style="padding:6px 8px">State</th>'
+      + '<th style="padding:6px 8px">Age</th>'
+      + '<th style="padding:6px 8px">Actions</th></tr>';
+    for (const r of items) {
+      const stateBadge = r.stateClass === 'success' ? '🟢'
+        : r.stateClass === 'error' ? '🔴' : '🟡';
+      const typeColor = r.type === 'BackupRestore' ? '#60a5fa' : '#a78bfa';
+      const actions = `<button class="btn btn-secondary" style="font-size:11px;padding:2px 8px;margin-right:4px" onclick="viewRestore('${r.type}','${r.namespace}','${r.name}')">View</button>` +
+        (isAdmin() ? `<button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteRestore('${r.type}','${r.namespace}','${r.name}')">Del</button>` : '');
+      html += `<tr style="border-bottom:1px solid #222">`
+        + `<td style="padding:6px 8px"><span style="color:${typeColor}">${r.type}</span></td>`
+        + `<td style="padding:6px 8px;font-family:monospace">${r.name}</td>`
+        + `<td style="padding:6px 8px">${r.sourceRef||'-'}</td>`
+        + `<td style="padding:6px 8px">${r.destinationNamespace||'-'}</td>`
+        + `<td style="padding:6px 8px">${stateBadge} ${r.state}</td>`
+        + `<td style="padding:6px 8px;color:#999">${r.age}</td>`
+        + `<td style="padding:6px 8px">${actions}</td></tr>`;
+      if (r.error) {
+        html += `<tr style="border-bottom:1px solid #222"><td colspan="7" style="padding:4px 8px 8px;color:#f87171;font-size:12px">⚠ ${r.error}</td></tr>`;
+      }
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  } catch (e) { /* ignore */ }
 }
 
 async function viewRestore(type, ns, name) {
   const resource = type === 'BackupRestore' ? 'backuprestore' : 'snapshotrestore';
   const [jsonRes, yamlRes] = await Promise.all([
-    fetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=summary`),
-    fetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
+    tpFetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=summary`),
+    tpFetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
   ]);
   const data = await jsonRes.json();
   const yamlText = await yamlRes.text();
@@ -268,10 +387,10 @@ async function viewRestore(type, ns, name) {
       const st = (c.status||'').toLowerCase();
       const icon = st === 'true' ? '✅' : st === 'false' ? '❌' : '⏳';
       html += `<tr style="border-bottom:1px solid #222">
-        <td style="padding:4px 8px">${c.type||''}</td>
-        <td style="padding:4px 8px">${icon} ${c.status||''}</td>
-        <td style="padding:4px 8px">${c.reason||''}</td>
-        <td style="padding:4px 8px;color:#999">${c.message||''}</td></tr>`;
+        <td style="padding:6px 8px">${c.type||''}</td>
+        <td style="padding:6px 8px">${icon} ${c.status||''}</td>
+        <td style="padding:6px 8px">${c.reason||''}</td>
+        <td style="padding:6px 8px;color:#999">${c.message||''}</td></tr>`;
     }
     html += '</table>';
   }
@@ -290,11 +409,16 @@ function closeDetail() {
 }
 
 async function deleteRestore(type, ns, name) {
+  if (!tpRequireAdmin()) return;
   if (!confirm(`Delete ${type} ${ns}/${name}?`)) return;
-  const res = await fetch(`/api/restore/${type}/${ns}/${name}`, {method:'DELETE'});
-  const r = await res.json();
-  toast(r.ok ? `Deleted ${name}` : 'Failed: '+r.message, r.ok ? 'success' : 'error');
-  if (r.ok) loadHistory();
+  try {
+    const res = await tpFetch(`/api/restore/${type}/${ns}/${name}`, {method:'DELETE'});
+    const r = await res.json();
+    toast(r.ok ? `Deleted ${name}` : 'Failed: '+r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadHistory();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
 }
 
 load();
