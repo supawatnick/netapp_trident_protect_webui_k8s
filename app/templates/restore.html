@@ -3,13 +3,15 @@
 {% block content %}
 <div class="page-header">
   <h1>Restore</h1>
-  <div class="subtitle">Restore backups or snapshots to a destination namespace</div>
+  <div class="subtitle">Restore backups or snapshots to a destination namespace (or in place)</div>
 </div>
 
 <div class="card">
   <h2>Source</h2>
   <div class="filters" style="margin-bottom:12px">
-    <label><span>Namespace</span><select id="src-ns" onchange="filterItems()"><option value="">-- select --</option></select></label>
+    <label><span>Namespace</span>
+      <select id="src-ns" onchange="filterItems()"><option value="">-- all namespaces --</option></select>
+    </label>
     <label style="display:flex;align-items:end;gap:12px;padding-top:18px">
       <span style="color:#999;font-size:12px">Type</span>
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px">
@@ -27,28 +29,75 @@
 <div class="card">
   <h2>Destination</h2>
   <div class="filters">
-    <label><span>Namespace</span><select id="dest-ns"></select></label>
-    <label><span>App Name</span><input id="dest-app" placeholder="auto-fill from source" /></label>
+    <label><span>Mode</span>
+      <select id="dest-mode" onchange="onModeChange()">
+        <option value="diff">Different namespace (cross-NS)</option>
+        <option value="inplace">Same namespace — in place (BackupInplaceRestore / SnapshotInplaceRestore)</option>
+      </select>
+    </label>
   </div>
-  <div id="sc-mapping-section" style="margin-top:12px;display:none">
-    <h4 style="margin:0 0 8px 0;font-size:13px">StorageClass Mapping</h4>
-    <div id="sc-mapping-rows"></div>
-    <div id="sc-mapping-status" style="margin-top:8px;font-size:12px;color:#999"></div>
+
+  <div id="dest-diff-section" style="margin-top:12px">
+    <div class="filters">
+      <label><span>Destination Namespace</span>
+        <select id="dest-ns"></select>
+      </label>
+      <label><span>App Name <span class="text-muted">(optional)</span></span>
+        <input id="dest-app" placeholder="auto-fill from source" />
+      </label>
+    </div>
+    <div id="sc-mapping-section" style="margin-top:12px;display:none">
+      <h4 style="margin:0 0 8px 0;font-size:13px">StorageClass Mapping</h4>
+      <div id="sc-mapping-rows"></div>
+      <div id="sc-mapping-status" style="margin-top:8px;font-size:12px;color:#999"></div>
+    </div>
+    <div style="margin-top:12px">
+      <label><span>Default StorageClass <span class="text-muted">(used when source SC is Unknown)</span></span>
+        <select id="dest-sc"></select>
+      </label>
+    </div>
   </div>
+
   <div style="margin-top:12px">
-    <label><span>Default StorageClass <span class="text-muted">(used when source SC is Unknown)</span></span>
-      <select id="dest-sc"></select>
+    <label><span>AppVault <span class="text-muted">(auto-filled, readonly)</span></span>
+      <input id="src-appvault" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
+    </label>
+    <label style="margin-top:6px"><span>AppArchivePath <span class="text-muted">(auto-filled, readonly)</span></span>
+      <input id="src-apparchivepath" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
     </label>
   </div>
 </div>
 
-<div style="margin:16px 0">
-  {% if tp_user and tp_user.role == 'admin' %}
-  <button class="btn" id="btn-restore" onclick="doRestore()" disabled>Restore Selected</button>
-  {% else %}
-  <button class="btn" id="btn-restore" disabled title="Readonly role cannot restore">Restore Selected</button>
-  {% endif %}
-  <span id="restore-msg" style="margin-left:12px;color:#666"></span>
+<!-- Tabs: Form / YAML -->
+<div class="card">
+  <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+    <button class="form-tab active" id="restore-tab-form" onclick="switchRestoreTab('form')">Form</button>
+    <button class="form-tab" id="restore-tab-yaml" onclick="switchRestoreTab('yaml')">YAML</button>
+  </div>
+
+  <!-- Form tab: contains the Restore Selected button + a hidden YAML preview -->
+  <div id="restore-form-tab">
+    <div class="form-row">
+      <button class="btn" id="btn-restore" onclick="doRestoreForm()" disabled>Restore Selected</button>
+      <button class="btn secondary" onclick="loadYamlFromForm()" title="Copy the generated manifest into the YAML tab">Show as YAML</button>
+      <span id="restore-msg" style="margin-left:12px;color:#666"></span>
+    </div>
+  </div>
+
+  <!-- YAML tab: editable textarea + Validate / Apply -->
+  <div id="restore-yaml-tab" style="display:none">
+    <div class="form-row">
+      <label style="flex:1"><span>Manifest (editable — applied as-is)</span>
+        <textarea id="restore-yaml" rows="18" style="font-family:var(--font-mono);font-size:12px;width:100%;"></textarea>
+      </label>
+    </div>
+    <div class="form-row">
+      <button class="btn secondary" onclick="loadYamlFromForm()" title="Regenerate the YAML from the form (overwrites edits)">Load from form</button>
+      <button class="btn secondary" onclick="validateRestoreYAML()">Validate</button>
+      <button class="btn" onclick="applyRestoreYAML()">Apply YAML</button>
+    </div>
+    <div id="restore-yaml-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -75,6 +124,7 @@
 {% block scripts %}
 <script>
 let allBackups = [], allSnapshots = [], destNsList = [], destScList = [];
+let allRestoreableByNsName = {};   // key "Type/ns/name" -> { appArchivePath, appVaultRef, applicationRef, ... }
 
 async function load() {
   const [srcRes, destRes] = await Promise.all([
@@ -88,6 +138,15 @@ async function load() {
   destNsList = dest.namespaces || [];
   destScList = dest.storageclasses || [];
 
+  // Index source items by Type/ns/name so the form can auto-fill AppVault + ArchivePath
+  allRestoreableByNsName = {};
+  for (const b of allBackups) {
+    allRestoreableByNsName[`Backup/${b.namespace}/${b.name}`] = b;
+  }
+  for (const s of allSnapshots) {
+    allRestoreableByNsName[`Snapshot/${s.namespace}/${s.name}`] = s;
+  }
+
   const nsSel = document.getElementById('src-ns');
   nsSel.innerHTML = '<option value="">-- all namespaces --</option>' +
     src.namespaces.map(n => `<option value="${n}">${n}</option>`).join('');
@@ -100,8 +159,22 @@ async function load() {
     `<option value="${s}">${s}</option>`
   ).join('');
 
+  onModeChange();
   filterItems();
   loadHistory();
+}
+
+function onModeChange() {
+  const mode = document.getElementById('dest-mode').value;
+  const diffSection = document.getElementById('dest-diff-section');
+  const scSection = document.getElementById('sc-mapping-section');
+  if (mode === 'inplace') {
+    diffSection.style.display = 'none';
+    // sc-mapping is part of diff-section and already hidden above
+  } else {
+    diffSection.style.display = '';
+    // SC mapping section is shown/hidden by rebuildScMapping() based on selection
+  }
 }
 
 function filterItems() {
@@ -121,6 +194,7 @@ function filterItems() {
   if (!items.length) {
     el.innerHTML = '';
     empty.style.display = '';
+    updateRestoreBtn();
     return;
   }
   empty.style.display = 'none';
@@ -141,7 +215,7 @@ function filterItems() {
     const scs = item.sourceStorageClasses || [];
     const scText = scs.length ? scs.join(', ') : '<span style="color:#999">Unknown</span>';
     html += `<tr style="border-bottom:1px solid #222;cursor:pointer" onclick="toggleItem(this)" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}">
-      <td style="padding:6px 8px"><input type="radio" name="restore-item" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="updateRestoreBtn()" /></td>
+      <td style="padding:6px 8px"><input type="radio" name="restore-item" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="onItemSelect()" /></td>
       <td style="padding:6px 8px;font-family:monospace">${item.name}</td>
       <td style="padding:6px 8px">${item.namespace}</td>
       <td style="padding:6px 8px">${item.applicationRef||'-'}</td>
@@ -152,15 +226,16 @@ function filterItems() {
   }
   html += '</table>';
   el.innerHTML = html;
+  onItemSelect();
 }
 
 function toggleItem(row) {
   const cb = row.querySelector('.item-cb');
   cb.checked = !cb.checked;
-  updateRestoreBtn();
+  onItemSelect();
 }
 
-function updateRestoreBtn() {
+function onItemSelect() {
   const cb = document.querySelector('.item-cb:checked');
   const btn = document.getElementById('btn-restore');
   btn.disabled = !cb;
@@ -169,10 +244,21 @@ function updateRestoreBtn() {
     if (firstApp && !document.getElementById('dest-app').value) {
       document.getElementById('dest-app').value = firstApp;
     }
+    // Auto-fill AppVault + AppArchivePath from the selected source item
+    const key = `${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`;
+    const src = allRestoreableByNsName[key];
+    if (src) {
+      const av = document.getElementById('src-appvault');
+      const ap = document.getElementById('src-apparchivepath');
+      av.value = src.appVaultRef || src.appvault || '';
+      ap.value = src.appArchivePath || '';
+    }
   }
   document.getElementById('restore-msg').textContent = cb
     ? `1 item selected: ${cb.dataset.name}` : '';
-  rebuildScMapping();
+  if (document.getElementById('dest-mode').value === 'diff') {
+    rebuildScMapping();
+  }
 }
 
 function getSelectedItems() {
@@ -189,6 +275,7 @@ function getSelectedItems() {
 }
 
 function rebuildScMapping() {
+  if (document.getElementById('dest-mode').value !== 'diff') return;
   const selected = getSelectedItems();
   const destScList = Array.from(document.getElementById('dest-sc').options).map(o => o.value);
   const section = document.getElementById('sc-mapping-section');
@@ -271,57 +358,236 @@ document.getElementById('sc-mapping-rows').addEventListener('change', e => {
   }
 });
 
-async function doRestore() {
-  if (!tpRequireAdmin()) return;
+// ---- Build YAML from form ----
+function buildRestoreYamlFromForm() {
   const cb = document.querySelector('.item-cb:checked');
-  if (!cb) return;
-  const destNs = document.getElementById('dest-ns').value;
-  const destScDefault = document.getElementById('dest-sc').value;
-  const destApp = document.getElementById('dest-app').value.trim();
-  if (!destNs) { toast('Select destination namespace', 'error'); return; }
+  if (!cb) return null;
+  const src = allRestoreableByNsName[`${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`];
+  if (!src) return null;
+  const mode = document.getElementById('dest-mode').value;
+  const type = cb.dataset.type;
+  const isBackup = (type === 'Backup');
+  const kind = mode === 'inplace'
+    ? (isBackup ? 'BackupInplaceRestore'  : 'SnapshotInplaceRestore')
+    : (isBackup ? 'BackupRestore'         : 'SnapshotRestore');
+  const name = cb.dataset.name;
+  const ns = cb.dataset.ns;
+  const av = document.getElementById('src-appvault').value || src.appVaultRef || 'ontap-s3-appvault';
+  const ap = document.getElementById('src-apparchivepath').value || src.appArchivePath || '';
 
-  const mapSels = document.querySelectorAll('.sc-map-dest');
-  const mappingParts = [];
-  for (const sel of mapSels) {
-    const src = sel.dataset.src;
-    const dest = sel.value;
-    if (src && dest && src !== dest) {
-      mappingParts.push(`${src}:${dest}`);
+  const spec = { appArchivePath: ap, appVaultRef: av };
+  if (mode === 'diff') {
+    const destNs = document.getElementById('dest-ns').value || ns;
+    const destApp = document.getElementById('dest-app').value.trim();
+    const mapSels = document.querySelectorAll('.sc-map-dest');
+    const mappingParts = [];
+    for (const sel of mapSels) {
+      const s = sel.dataset.src;
+      const d = sel.value;
+      if (s && d && s !== d) mappingParts.push(`${s}:${d}`);
+    }
+    const storageclassMapping = mappingParts.length ? Array.from(new Set(mappingParts)).join(',') : '';
+    if (destApp) spec.destinationApplicationName = destApp;
+    if (storageclassMapping) {
+      spec.storageclassMapping = storageclassMapping;
+    } else {
+      const destScDefault = document.getElementById('dest-sc').value;
+      if (destScDefault) spec.storageclassMapping = `${destScDefault}:${destScDefault}`;
+    }
+    spec.namespaceMapping = [{source: ns, destination: destNs}];
+  }
+  // If the source item has a known name, use it; otherwise derive from the CR kind
+  const crName = (mode === 'inplace')
+    ? `${isBackup ? 'restore-inplace' : 'snap-inplace'}-${name}`
+    : `${isBackup ? 'restore' : 'snapshot-restore'}-${name}`;
+  return {
+    apiVersion: 'protect.trident.netapp.io/v1',
+    kind,
+    metadata: { name: crName, namespace: ns },
+    spec,
+  };
+}
+
+function switchRestoreTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('restore-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('restore-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('restore-tab-form').classList.toggle('active', isForm);
+  document.getElementById('restore-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    // Switching TO yaml: load the form's current YAML if the textarea is empty
+    const ta = document.getElementById('restore-yaml');
+    if (!ta.value.trim()) loadYamlFromForm();
+  }
+}
+
+function loadYamlFromForm() {
+  const doc = buildRestoreYamlFromForm();
+  if (!doc) {
+    toast('Select a source item first', 'info');
+    return;
+  }
+  const yamlStr = dumpYaml(doc);
+  const ta = document.getElementById('restore-yaml');
+  ta.value = yamlStr;
+  // Also switch to the YAML tab so the user can see the result
+  switchRestoreTab('yaml');
+  toast('Loaded YAML from form (switched to YAML tab)', 'success');
+}
+
+function dumpYaml(obj) {
+  // Minimal YAML serializer (sufficient for the restore CRs we generate).
+  const lines = [];
+  function dump(node, indent) {
+    const pad = ' '.repeat(indent);
+    if (Array.isArray(node)) {
+      if (node.length === 0) return pad + '[]';
+      for (const v of node) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          const entries = Object.entries(v);
+          lines.push(pad + '-');
+          for (let i = 0; i < entries.length; i++) {
+            const [k, val] = entries[i];
+            const isLast = (i === entries.length - 1);
+            const suffix = (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0) ? '' : '';
+            lines.push(pad + '  ' + k + ':' + suffix);
+            if (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0) {
+              dump(val, indent + 4);
+            } else if (Array.isArray(val) && val.length > 0) {
+              if (val.every(x => x && typeof x !== 'object')) {
+                lines[lines.length-1] = pad + '  ' + k + ': [' + val.map(quoteIfString).join(', ') + ']';
+              } else {
+                dump(val, indent + 4);
+              }
+            } else if (val === null || val === undefined) {
+              lines.push(pad + '  ' + k + ': null');
+            } else if (typeof val === 'string') {
+              lines.push(pad + '  ' + k + ': ' + quoteIfString(val));
+            } else {
+              lines.push(pad + '  ' + k + ': ' + JSON.stringify(val));
+            }
+          }
+        } else {
+          lines.push(pad + '- ' + quoteIfString(v));
+        }
+      }
+    } else if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0) {
+          lines.push(pad + k + ':');
+          dump(v, indent + 2);
+        } else if (Array.isArray(v) && v.length > 0) {
+          if (v.every(x => x && typeof x !== 'object')) {
+            lines.push(pad + k + ': [' + v.map(quoteIfString).join(', ') + ']');
+          } else {
+            lines.push(pad + k + ':');
+            dump(v, indent + 2);
+          }
+        } else if (v === null || v === undefined) {
+          lines.push(pad + k + ': null');
+        } else if (typeof v === 'string') {
+          lines.push(pad + k + ': ' + quoteIfString(v));
+        } else {
+          lines.push(pad + k + ': ' + JSON.stringify(v));
+        }
+      }
     }
   }
-  const storageclassMapping = mappingParts.length ? Array.from(new Set(mappingParts)).join(',') : '';
+  dump(obj, 0);
+  return lines.join('\n') + '\n';
+}
 
-  const type = cb.dataset.type;
-  const ns = cb.dataset.ns;
-  const name = cb.dataset.name;
-  const endpoint = type === 'Backup'
-    ? `/api/backup/${ns}/${name}/backuprestores`
-    : `/api/snapshot/${ns}/${name}/snapshotrestores`;
-  const body = { destination_namespace: destNs };
-  if (storageclassMapping) body.storageclassMapping = storageclassMapping;
-  if (destApp) body.destinationApplicationName = destApp;
-  if (!storageclassMapping && destScDefault) body.storageclassMapping = `${destScDefault}:${destScDefault}`;
+function quoteIfString(s) {
+  // Quote strings that contain special chars or look like reserved words.
+  if (typeof s !== 'string') return JSON.stringify(s);
+  if (/^[A-Za-z0-9_\-./:@%]+$/.test(s) && !['true','false','null','yes','no','on','off'].includes(s.toLowerCase())) {
+    return s;
+  }
+  return JSON.stringify(s);
+}
 
-  let ok = false, message = '';
+async function doRestoreForm() {
+  if (!tpRequireAdmin()) return;
+  const cb = document.querySelector('.item-cb:checked');
+  if (!cb) { toast('Select an item first', 'info'); return; }
+  const doc = buildRestoreYamlFromForm();
+  if (!doc) return;
+  await doRestoreSubmit(doc);
+}
+
+async function validateRestoreYAML() {
+  const yaml = document.getElementById('restore-yaml').value;
+  const msg = document.getElementById('restore-yaml-msg');
+  if (!yaml.trim()) {
+    msg.textContent = 'YAML is empty';
+    msg.style.color = 'var(--color-error)';
+    return;
+  }
   try {
-    const res = await tpFetch(endpoint, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
+    const res = await tpFetch('/api/restore/validate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml}),
     });
     const r = await res.json();
-    ok = r.ok;
-    message = r.message;
-  } catch(e) {
-    message = e.message;
+    msg.textContent = r.message;
+    msg.style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
+  } catch (e) {
+    msg.textContent = 'Validate failed: ' + e.message;
+    msg.style.color = 'var(--color-error)';
   }
+}
 
-  toast(ok ? `Restore triggered: ${name}` : `Failed: ${message}`, ok ? 'success' : 'error');
-  document.getElementById('restore-msg').textContent = ok ? `Restore triggered: ${name}` : `Failed: ${message}`;
-  loadHistory();
-  setTimeout(loadHistory, 3000);
-  setTimeout(loadHistory, 8000);
-  setTimeout(loadHistory, 15000);
+async function applyRestoreYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = document.getElementById('restore-yaml').value;
+  if (!yaml.trim()) { toast('YAML is empty', 'error'); return; }
+  try {
+    // Parse and run via the proper endpoint based on kind.
+    // We try to identify the kind from the YAML and route accordingly.
+    const res = await tpFetch('/api/restore/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      document.getElementById('restore-yaml-msg').textContent = r.message;
+      document.getElementById('restore-yaml-msg').style.color = 'var(--color-success)';
+      setTimeout(loadHistory, 2000);
+    } else {
+      document.getElementById('restore-yaml-msg').textContent = r.message;
+      document.getElementById('restore-yaml-msg').style.color = 'var(--color-error)';
+    }
+  } catch (e) {
+    toast('Apply failed: ' + e.message, 'error');
+  }
+}
+
+async function doRestoreSubmit(doc) {
+  // doc: a parsed restore CR object. Route based on kind to the right endpoint.
+  const kind = doc.kind;
+  const isInplace = kind.endsWith('InplaceRestore');
+  const type = kind.startsWith('Backup') ? 'Backup' : 'Snapshot';
+  const ns = doc.metadata.namespace;
+  const name = doc.spec.appArchivePath && doc.spec.appArchivePath.split('/').pop()
+              || (doc.metadata.name || '').replace(/^restore-inplace-/, '').replace(/^snap-inplace-/, '').replace(/^restore-/, '').replace(/^snapshot-restore-/, '');
+  // Better: use the source item key from the form (caller passes it).
+  // For simplicity, we'll just rely on the YAML apply path (handles all 4 kinds).
+  try {
+    const res = await tpFetch('/api/restore/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml: dumpYaml(doc)}),
+    });
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    document.getElementById('restore-msg').textContent = r.message;
+    document.getElementById('restore-msg').style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
+    if (r.ok) {
+      setTimeout(() => { loadHistory(); }, 2000);
+    }
+  } catch (e) {
+    toast('Restore failed: ' + e.message, 'error');
+  }
 }
 
 async function loadHistory() {
@@ -349,76 +615,111 @@ async function loadHistory() {
     for (const r of items) {
       const stateBadge = r.stateClass === 'success' ? '🟢'
         : r.stateClass === 'error' ? '🔴' : '🟡';
-      const typeColor = r.type === 'BackupRestore' ? '#60a5fa' : '#a78bfa';
+      const typeColor = r.type === 'BackupRestore' ? '#60a5fa'
+        : r.type === 'BackupInplaceRestore' ? '#34d399'
+        : r.type === 'SnapshotRestore' ? '#a78bfa'
+        : '#f59e0b';
       const actions = `<button class="btn btn-secondary" style="font-size:11px;padding:2px 8px;margin-right:4px" onclick="viewRestore('${r.type}','${r.namespace}','${r.name}')">View</button>` +
         (isAdmin() ? `<button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteRestore('${r.type}','${r.namespace}','${r.name}')">Del</button>` : '');
-      html += `<tr style="border-bottom:1px solid #222">`
-        + `<td style="padding:6px 8px"><span style="color:${typeColor}">${r.type}</span></td>`
-        + `<td style="padding:6px 8px;font-family:monospace">${r.name}</td>`
-        + `<td style="padding:6px 8px">${r.sourceRef||'-'}</td>`
-        + `<td style="padding:6px 8px">${r.destinationNamespace||'-'}</td>`
-        + `<td style="padding:6px 8px">${stateBadge} ${r.state}</td>`
-        + `<td style="padding:6px 8px;color:#999">${r.age}</td>`
-        + `<td style="padding:6px 8px">${actions}</td></tr>`;
-      if (r.error) {
-        html += `<tr style="border-bottom:1px solid #222"><td colspan="7" style="padding:4px 8px 8px;color:#f87171;font-size:12px">⚠ ${r.error}</td></tr>`;
-      }
+      html += `<tr style="border-bottom:1px solid #222">
+        <td style="padding:6px 8px;color:${typeColor}">${r.type}</td>
+        <td style="padding:6px 8px;font-family:monospace">${r.name}</td>
+        <td style="padding:6px 8px;color:#999">${r.sourceRef || '-'}</td>
+        <td style="padding:6px 8px">${r.destinationNamespace || '-'}</td>
+        <td style="padding:6px 8px">${stateBadge} ${r.state}</td>
+        <td style="padding:6px 8px;color:#999">${r.age || ''}</td>
+        <td style="padding:6px 8px">${actions}</td>
+      </tr>`;
     }
     html += '</table>';
     el.innerHTML = html;
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    console.error('loadHistory failed:', e);
+  }
 }
 
-async function viewRestore(type, ns, name) {
-  const resource = type === 'BackupRestore' ? 'backuprestore' : 'snapshotrestore';
-  const [jsonRes, yamlRes] = await Promise.all([
-    tpFetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=summary`),
-    tpFetch(`/api/${resource}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
-  ]);
-  const data = await jsonRes.json();
-  const yamlText = await yamlRes.text();
-  document.getElementById('detail-title').textContent = `${type}: ${ns}/${name}`;
-  let html = '<div style="padding:16px">';
-  if (data.conditions && data.conditions.length) {
-    html += '<h3 style="margin:0 0 8px;color:#e5e7eb;font-size:14px">Conditions</h3>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">';
-    html += '<tr style="border-bottom:1px solid #333;color:#999"><th style="padding:4px 8px;text-align:left">Type</th><th style="padding:4px 8px;text-align:left">Status</th><th style="padding:4px 8px;text-align:left">Reason</th><th style="padding:4px 8px;text-align:left">Message</th></tr>';
-    for (const c of data.conditions) {
-      const st = (c.status||'').toLowerCase();
-      const icon = st === 'true' ? '✅' : st === 'false' ? '❌' : '⏳';
-      html += `<tr style="border-bottom:1px solid #222">
-        <td style="padding:6px 8px">${c.type||''}</td>
-        <td style="padding:6px 8px">${icon} ${c.status||''}</td>
-        <td style="padding:6px 8px">${c.reason||''}</td>
-        <td style="padding:6px 8px;color:#999">${c.message||''}</td></tr>`;
-    }
-    html += '</table>';
+async function viewRestore(type, namespace, name) {
+  const endpoint = type === 'BackupRestore' || type === 'BackupInplaceRestore'
+    ? `/api/backuprestore/${namespace}/${name}`
+    : `/api/snapshotrestore/${namespace}/${name}`;
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      tpFetch(endpoint + '?format=summary'),
+      tpFetch(endpoint + '?format=yaml'),
+    ]);
+    const r = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewRestoreModal(r, yamlText, type);
+    document.getElementById('detail-overlay').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load restore detail: ' + e.message, 'error');
   }
-  if (data.error) {
-    html += `<div style="background:#450a0a;border:1px solid #7f1d1d;border-radius:6px;padding:10px;margin-bottom:12px;color:#fca5a5;font-size:13px">⚠ ${data.error}</div>`;
+}
+
+function renderViewRestoreModal(r, yamlText, type) {
+  const md = r.metadata || {};
+  const sp = r.spec || {};
+  const st = r.status || {};
+  const typeColor = type === 'BackupRestore' ? '#60a5fa'
+    : type === 'BackupInplaceRestore' ? '#34d399'
+    : type === 'SnapshotRestore' ? '#a78bfa'
+    : '#f59e0b';
+  let html = `<div style="margin-bottom:12px"><span style="background:${typeColor};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">${type}</span></div>`;
+  html += '<h4 style="margin:0 0 8px 0;font-size:13px">Metadata</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">Name</td><td style="padding:4px 8px;font-family:monospace">${md.name || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">Namespace</td><td style="padding:4px 8px">${md.namespace || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">Created</td><td style="padding:4px 8px">${md.creationTimestamp || '-'}</td></tr>`;
+  html += '</table><h4 style="margin:12px 0 8px 0;font-size:13px">Spec</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">AppVault</td><td style="padding:4px 8px;font-family:monospace">${sp.appVaultRef || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">AppArchivePath</td><td style="padding:4px 8px;font-family:monospace;font-size:12px;word-break:break-all">${sp.appArchivePath || '-'}</td></tr>`;
+  if (sp.destinationApplicationName) {
+    html += `<tr><td style="padding:4px 8px;color:#999">Destination App</td><td style="padding:4px 8px">${sp.destinationApplicationName}</td></tr>`;
   }
-  html += '<h3 style="margin:0 0 8px;color:#e5e7eb;font-size:14px">Full Object</h3>';
-  html += `<pre style="background:#111;border:1px solid #333;border-radius:6px;padding:12px;overflow-x:auto;max-height:400px;overflow-y:auto;font-size:12px;color:#d1d5db;white-space:pre-wrap">${yamlText||'No data'}</pre>`;
-  html += '</div>';
+  if (sp.namespaceMapping) {
+    const nm = Array.isArray(sp.namespaceMapping) ? sp.namespaceMapping : [sp.namespaceMapping];
+    html += `<tr><td style="padding:4px 8px;color:#999">Namespace Mapping</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${nm.map(m => `${m.source || m[0]} → ${m.destination || m[1]}`).join(', ')}</td></tr>`;
+  }
+  if (sp.storageclassMapping) {
+    html += `<tr><td style="padding:4px 8px;color:#999">SC Mapping</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${sp.storageclassMapping}</td></tr>`;
+  }
+  html += '</table>';
+  html += '<h4 style="margin:12px 0 8px 0;font-size:13px">Status</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">State</td><td style="padding:4px 8px">${st.state || '-'}</td></tr>`;
+  if (st.error) html += `<tr><td style="padding:4px 8px;color:#999">Error</td><td style="padding:4px 8px;color:var(--color-error)">${st.error}</td></tr>`;
+  html += '</table>';
+  if (yamlText) {
+    html += '<h4 style="margin:12px 0 8px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">Raw YAML <button class="btn secondary small" onclick="navigator.clipboard.writeText(document.getElementById(\'restore-yaml-text\').textContent); toast(\'Copied\',\'success\')">Copy</button></h4>';
+    html += `<pre id="restore-yaml-text" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);">${escapeHtml(yamlText)}</pre>`;
+  }
+  document.getElementById('detail-title').textContent = `${type}: ${md.name || ''}`;
   document.getElementById('detail-body').innerHTML = html;
-  document.getElementById('detail-overlay').style.display = '';
 }
 
 function closeDetail() {
   document.getElementById('detail-overlay').style.display = 'none';
 }
 
-async function deleteRestore(type, ns, name) {
+async function deleteRestore(type, namespace, name) {
   if (!tpRequireAdmin()) return;
-  if (!confirm(`Delete ${type} ${ns}/${name}?`)) return;
+  if (!confirm(`Delete ${type} "${namespace}/${name}"?`)) return;
   try {
-    const res = await tpFetch(`/api/restore/${type}/${ns}/${name}`, {method:'DELETE'});
+    const res = await tpFetch(`/api/restore/${encodeURIComponent(type)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {method: 'DELETE'});
     const r = await res.json();
-    toast(r.ok ? `Deleted ${name}` : 'Failed: '+r.message, r.ok ? 'success' : 'error');
+    toast(r.message, r.ok ? 'success' : 'error');
     if (r.ok) loadHistory();
   } catch (e) {
     toast('Delete failed: ' + e.message, 'error');
   }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 load();

@@ -1,3 +1,62 @@
+## [v1.4.7] — 2026-08-01
+
+### Added — Restore with all 4 kinds + Form/YAML tabs
+
+Restores the 4 example restore kinds from `/root/example/*.yaml`:
+- `BackupRestore` (cross-NS)
+- `BackupInplaceRestore` (in place)
+- `SnapshotRestore` (cross-NS)
+- `SnapshotInplaceRestore` (in place)
+
+**New restore mode** — radio: "Different namespace" (default) or "Same namespace — in place".
+When "Same namespace" selected, the destination NS / app name / SC mapping
+sections are hidden (inplace uses the cluster's existing SC).
+
+**Form + YAML tabs** in restore.html (like create-app / create-schedule):
+- **Form tab**: existing form + new mode toggle + auto-filled readonly
+  AppVault + AppArchivePath fields.
+- **YAML tab**: editable textarea with **Load from form** / **Validate**
+  / **Apply YAML** buttons. Edits to the YAML are applied as-is (raw
+  `kubectl apply -f -`).
+
+**New backend functions in `trident_protect.py`:**
+- `trigger_backup_inplace()` + `trigger_snapshot_inplace()` —
+  call `tridentprotect-ctl create backupinplacerestore / snapshotinplacerestore`
+- `validate_restore_yaml()` — parses + checks apiVersion + kind + required
+  fields per kind (uses the example YAML schema).
+- `apply_restore_yaml()` — `kubectl apply -f -` for the raw YAML apply path.
+- `list_restores()` rewritten to query all 4 CR kinds (was 2).
+
+**New endpoints in `main.py`:**
+- `POST /api/backup/<ns>/<name>/inplacerestore`
+- `POST /api/snapshot/<ns>/<name>/inplacerestore`
+- `POST /api/restore/validate`
+- `POST /api/restore/apply`
+
+All admin-gated (readonly gets 403 via the existing
+`_READONLY_WRITE_ALLOWLIST` / `_ADMIN_ONLY_PATHS` mechanism).
+
+**Audit log labels** for the new kinds:
+- `kind="backupinplacerestore"`, `action="trigger"`
+- `kind="snapshotinplacerestore"`, `action="trigger"`
+- `kind="restore"`, `action="apply"` (for raw YAML apply)
+
+**Verified live on 107 (clus1 + clus2):**
+- `POST /api/backup/<ns>/<name>/inplacerestore` (admin) → 200, CR applied.
+- `POST /api/snapshot/<ns>/<name>/inplacerestore` (admin) → 200, CR applied.
+- `POST /api/restore/validate` accepts all 4 kinds + rejects unknown kinds.
+- `POST /api/restore/apply` applies user-edited YAML via `kubectl apply -f -`.
+- `GET /api/restores` returns 4 kinds in `type` field.
+- viewer gets 403 on all mutating endpoints ✓
+- 12 page routes all return 200 ✓
+
+### Files affected
+- `app/trident_protect.py` — 4 new functions, 1 list_restores rewrite
+- `app/main.py` — 4 new routes, 3 audit map entries
+- `app/templates/restore.html` — full rewrite (Form/YAML tabs + radio mode)
+- CHANGELOG, README, base.html, login.html, make-package.sh — version bump
+
+## [v1.4.6] — 2026-08-01
 ## [v1.4.6] — 2026-08-01
 
 ### Fixed — Schedules + Restore parity with OCP v1.4.3

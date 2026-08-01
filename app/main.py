@@ -62,14 +62,17 @@ _AUDIT_ENDPOINT_MAP: dict[str, tuple[str, str]] = {
     "api_backup_apply": ("backup", "create"),
     "api_delete_backup": ("backup", "delete"),
     "api_trigger_backuprestore": ("backuprestore", "trigger"),
+    "api_trigger_backup_inplace": ("backupinplacerestore", "trigger"),
     "api_snapshot_apply": ("snapshot", "create"),
     "api_delete_snapshot": ("snapshot", "delete"),
     "api_trigger_snapshotrestore": ("snapshotrestore", "trigger"),
+    "api_trigger_snapshot_inplace": ("snapshotinplacerestore", "trigger"),
     "api_application_apply": ("application", "create"),
     "api_delete_application": ("application", "delete"),
     "api_create_appvault": ("appvault", "create"),
     "api_delete_appvault": ("appvault", "delete"),
     "api_delete_restore": ("restore", "delete"),
+    "api_restore_apply": ("restore", "apply"),
     "api_dr_create_relationship": ("dr_relationship", "create"),
     "api_dr_delete_relationship": ("dr_relationship", "delete"),
     "api_dr_failover_relationship": ("dr_relationship", "failover"),
@@ -565,6 +568,46 @@ def register_routes(app: Flask) -> None:
     def api_list_restores():
         items = trident_protect.list_restores()
         return jsonify({"items": items})
+
+    @app.route("/api/backup/<namespace>/<name>/inplacerestore", methods=["POST"])
+    def api_trigger_backup_inplace(namespace, name):
+        backup = trident_protect.get_backup(namespace, name)
+        if not backup:
+            return jsonify({"ok": False, "message": "Backup not found"}), 404
+        # Inplace restore: CLI auto-resolves AppVault + archive path
+        # from --backup <ns>/<name>; no destination namespace or
+        # storageclass mapping is used.
+        ok, msg = trident_protect.trigger_backup_inplace(
+            backup_name=name, source_namespace=namespace,
+        )
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+    @app.route("/api/snapshot/<namespace>/<name>/inplacerestore", methods=["POST"])
+    def api_trigger_snapshot_inplace(namespace, name):
+        snapshot = trident_protect.get_snapshot(namespace, name)
+        if not snapshot:
+            return jsonify({"ok": False, "message": "Snapshot not found"}), 404
+        ok, msg = trident_protect.trigger_snapshot_inplace(
+            snapshot_name=name, source_namespace=namespace,
+        )
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+    @app.route("/api/restore/validate", methods=["POST"])
+    def api_restore_validate():
+        body = request.get_json() or {}
+        yaml_str = body.get("yaml", "")
+        ok, msg = trident_protect.validate_restore_yaml(yaml_str)
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+    @app.route("/api/restore/apply", methods=["POST"])
+    def api_restore_apply():
+        body = request.get_json() or {}
+        yaml_str = body.get("yaml", "")
+        ok1, msg1 = trident_protect.validate_restore_yaml(yaml_str)
+        if not ok1:
+            return jsonify({"ok": False, "message": f"Invalid: {msg1}"}), 400
+        ok2, msg2 = trident_protect.apply_restore_yaml(yaml_str)
+        return jsonify({"ok": ok2, "message": msg2}), (200 if ok2 else 400)
 
     @app.route("/api/restore/<restore_type>/<namespace>/<name>", methods=["DELETE"])
     def api_delete_restore(restore_type, namespace, name):

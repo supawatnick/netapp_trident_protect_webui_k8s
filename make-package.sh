@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-UI_VERSION="1.4.6"
+UI_VERSION="1.4.7"
 PACKAGE_NAME="trident-protect-webui-v${UI_VERSION}"
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
 OUTPUT_FILE="${OUTPUT_DIR}/${PACKAGE_NAME}.tar.gz"

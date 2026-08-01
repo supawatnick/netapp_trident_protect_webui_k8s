@@ -1359,6 +1359,111 @@ def trigger_snapshot_restore(
     return False, (err or out).strip()
 
 
+
+
+def trigger_backup_inplace(
+    backup_name: str,
+    source_namespace: str,
+) -> tuple[bool, str]:
+    """Trigger an in-place BackupRestore (BackupInplaceRestore CR).
+
+    No destination namespace, no namespaceMapping, no storageclassMapping.
+    The backup is restored back to the source namespace. Uses --backup to
+    let the CLI auto-resolve the AppVault + archive path.
+    """
+    args = [
+        "create", "backupinplacerestore", f"restore-inplace-{backup_name}",
+        "--backup", f"{source_namespace}/{backup_name}",
+    ]
+    rc, out, err = _run(args, timeout=60)
+    if rc == 0:
+        return True, (out or f"BackupInplaceRestore triggered for {source_namespace}/{backup_name}").strip()
+    return False, (err or out).strip()
+
+
+def trigger_snapshot_inplace(
+    snapshot_name: str,
+    source_namespace: str,
+) -> tuple[bool, str]:
+    """Trigger an in-place SnapshotRestore (SnapshotInplaceRestore CR).
+
+    No destination namespace, no namespaceMapping, no storageclassMapping.
+    The snapshot is restored back to the source namespace. Uses --snapshot
+    to let the CLI auto-resolve the AppVault + archive path.
+    """
+    args = [
+        "create", "snapshotinplacerestore", f"snap-inplace-{snapshot_name}",
+        "--snapshot", f"{source_namespace}/{snapshot_name}",
+    ]
+    rc, out, err = _run(args, timeout=60)
+    if rc == 0:
+        return True, (out or f"SnapshotInplaceRestore triggered for {source_namespace}/{snapshot_name}").strip()
+    return False, (err or out).strip()
+
+
+# Required-field map for each restore kind (used by validate_restore_yaml).
+_RESTORE_REQUIRED_FIELDS: dict[str, list[str]] = {
+    "BackupRestore":          ["appArchivePath", "appVaultRef", "namespaceMapping"],
+    "BackupInplaceRestore":   ["appArchivePath", "appVaultRef"],
+    "SnapshotRestore":        ["appArchivePath", "appVaultRef", "namespaceMapping"],
+    "SnapshotInplaceRestore": ["appArchivePath", "appVaultRef"],
+}
+
+
+def validate_restore_yaml(yaml_str: str) -> tuple[bool, str]:
+    """Parse + validate a user-edited restore YAML.
+
+    Accepts any of the 4 supported restore CR kinds. Rejects unknown
+    kinds, missing apiVersion prefix, missing required spec fields.
+    """
+    try:
+        doc = _yaml.safe_load(yaml_str)
+    except _yaml.YAMLError as e:
+        return False, f"YAML syntax error: {e}"
+    if not isinstance(doc, dict):
+        return False, "YAML must be a single document (mapping)"
+
+    kind = doc.get("kind")
+    if kind not in _RESTORE_REQUIRED_FIELDS:
+        return False, (
+            f"kind must be one of {sorted(_RESTORE_REQUIRED_FIELDS.keys())} "
+            f"(got '{kind}')"
+        )
+
+    api_version = doc.get("apiVersion", "")
+    if not api_version.startswith("protect.trident.netapp.io"):
+        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')"
+
+    metadata = doc.get("metadata", {}) or {}
+    name = metadata.get("name")
+    ns = metadata.get("namespace")
+    if not name:
+        return False, "metadata.name required"
+    if not ns:
+        return False, "metadata.namespace required"
+
+    spec = doc.get("spec", {}) or {}
+    for field in _RESTORE_REQUIRED_FIELDS[kind]:
+        if not spec.get(field):
+            return False, f"spec.{field} required for {kind}"
+
+    return True, f"Valid — will create {kind} '{name}' in namespace '{ns}'"
+
+
+def apply_restore_yaml(yaml_str: str) -> tuple[bool, str]:
+    """Apply a user-edited restore YAML via `kubectl apply -f -` (stdin).
+
+    Used by the YAML tab in restore.html. Only invoked after a successful
+    validate_restore_yaml() and admin role check. Restricted to admin.
+    """
+    cmd = [get_platform_cli(), "apply", "-f", "-"]
+    if detect_platform() == "k8s":
+        # For k8s, the active context will be used (set by /api/settings/login or /switch).
+        pass
+    proc = subprocess.run(cmd, input=yaml_str, capture_output=True, text=True, timeout=30)
+    if proc.returncode == 0:
+        return True, (proc.stdout or "Restore applied").strip()
+    return False, (proc.stderr or proc.stdout).strip()
 def delete_backup(namespace: str, name: str) -> tuple[bool, str]:
     rc, out, err = _run(["delete", "backup", name, "-n", namespace])
     if rc == 0:
@@ -1389,13 +1494,21 @@ def get_restore_source_namespaces() -> dict:
     }
 
 
+# All 4 supported restore CR kinds (per Trident Protect v26.06.0+).
+_RESTORE_KINDS: list[tuple[str, str]] = [
+    ("BackupRestore",          "backuprestore"),
+    ("BackupInplaceRestore",   "backupinplacerestore"),
+    ("SnapshotRestore",        "snapshotrestore"),
+    ("SnapshotInplaceRestore", "snapshotinplacerestore"),
+]
+
+
 def list_restores() -> list[dict]:
-    """List all BackupRestores and SnapshotRestores."""
+    """List all 4 restore CR kinds (cross-NS + inplace)."""
     results = []
-    for r in _list("backuprestore"):
-        results.append(serialize_restore(r, "BackupRestore"))
-    for r in _list("snapshotrestore"):
-        results.append(serialize_restore(r, "SnapshotRestore"))
+    for kind, resource in _RESTORE_KINDS:
+        for r in _list(resource):
+            results.append(serialize_restore(r, kind))
     return results
 
 
@@ -1427,7 +1540,19 @@ def serialize_restore(r: dict, restore_type: str) -> dict:
 
 
 def delete_restore(restore_type: str, namespace: str, name: str) -> tuple[bool, str]:
-    resource = "backuprestore" if "Backup" in restore_type else "snapshotrestore"
+    """Delete a restore CR by its kind (any of the 4 supported kinds)."""
+    # reverse-lookup the resource name from the kind
+    resource = None
+    for kind, res in _RESTORE_KINDS:
+        if kind == restore_type:
+            resource = res
+            break
+    if not resource:
+        # Fallback: try to infer from the type name
+        if "Backup" in restore_type:
+            resource = "backupinplacerestore" if "Inplace" in restore_type else "backuprestore"
+        else:
+            resource = "snapshotinplacerestore" if "Inplace" in restore_type else "snapshotrestore"
     rc, out, err = _run(["delete", resource, name, "-n", namespace])
     if rc == 0:
         return True, out.strip() or f"Deleted {namespace}/{name}"
