@@ -1,3 +1,128 @@
+## [v1.4.6] — 2026-08-01
+
+### Fixed — Schedules + Restore parity with OCP v1.4.3
+
+- **Schedules page (`schedules.html`):** full copy of 105 OCP version.
+  Restores:
+  - Admin-gated `+ Add Schedule` button
+  - `tpRequireAdmin()` guards in 4 functions (showAddScheduleModal,
+    deleteSchedule, validateScheduleYAML, applyScheduleYAML)
+  - `Delete` row button is `isAdmin() ? ... : ''`
+  - Disable/Enable toggle button in each schedule row (calls
+    `toggleSchedule(ns, name, enable)`)
+  - **k8s-adapted**: `toggleSchedule` resolves cluster context from the
+    **active profile's** `kubeconfig_context` (instead of the OCP
+    `clus1-/clus2-` namespace prefix → `clus1-ocp/clus2-ocp` profile).
+  - Backend `_resolve_schedule_context` (in `main.py`) was already active-
+    profile-based; the JS now matches.
+- **Restore page (`restore.html`):** full copy of 105 OCP version
+  (byte-identical, 0 diff). Restores:
+  - Single radio select (replaces k8s multi-checkbox)
+  - "Source SC" column in items list (per-item `sourceStorageClasses`)
+  - SC mapping section (`sc-mapping-section`, `sc-mapping-rows`,
+    `sc-mapping-status`) that shows a row per distinct source SC with
+    a destination dropdown
+  - `rebuildScMapping()` / `refreshMappingStatus()` / `getSelectedItems()`
+    helper functions
+  - `doRestore()` uses `tpFetch` + `tpRequireAdmin` + sends
+    `storageclassMapping: "src1:dst1,src2:dst2"` to the backend
+  - Improved history table (Type, Name, Source, Dest NS, State, Age,
+    Actions with admin-gated Del)
+
+### Deep button-by-button compare (105 OCP v1.4.3 vs 107 k8s v1.4.6)
+
+| Template | 105 buttons | 107 buttons | Match |
+| --- | --- | --- | --- |
+| `schedules.html` | 13 | 13 | **exact** |
+| `restore.html` | 6 | 6 | **exact** |
+| `restore.html` diff lines | — | 0 | **byte-identical** |
+| `schedules.html` diff lines | — | 8 (only the toggleSchedule context-resolution JS) | **k8s-adapted** |
+
+### Verified live on 107
+- Schedule enable/disable: admin → 200, viewer → 403 ✓
+- Restore sources: 3 backups + 3 snapshots ✓
+- Restore destinations: 9 namespaces + 4 storage classes ✓
+- Restore history: 1 item ✓
+- Restore trigger: admin can submit, viewer → 403 ✓
+
+### Notes
+- 105 OCP v1.4.3 was not modified (per user request); only read as source.
+- No backend (`main.py`, `trident_protect.py`) changes needed — endpoints
+  already support schedule enable/disable and storageclassMapping.
+
+## [v1.4.5] — 2026-08-01
+
+### Fixed — Credentials tab + Switch button
+
+- **Settings → Credentials tab:** added admin-gated
+  `<a href="/settings/credentials">Credentials</a>` in `settings_base.html`
+  (105 had it, k8s was missing).
+- **Switch button bug:** `async function switchToProfile(name)` was missing
+  in k8s `settings.js` (the button's `onclick` was a JS error, so users
+  were forced to click "Login" each time). Ported from 105.
+- Version bump.
+
+## [v1.4.4] — 2026-08-01
+## [v1.4.4] — 2026-08-01
+
+### Fixed — button-by-button parity with OCP v1.4.3 + auto-login
+
+- **Cluster profile switch auto-login (item #1):**
+  - Backend `api_switch_profile` now uses the stored `profile.token` to call
+    `oc_login_with_token` automatically, so switching between clusters no
+    longer requires pasting the bearer token every time.
+  - `oc_login_with_token` (k8s branch) rewritten to use a **stable** cluster
+    name derived from the api_url host (e.g. `webui-10-10-10-41`) instead
+    of a random `webui-cluster-<hex8>`. Prevents kubeconfig pollution and
+    makes `find_kubecontext_for_api` work reliably.
+  - `settings.js` `renderProfiles` now shows a one-click "Switch" button
+    when the profile has a stored token (and a "Login" re-auth button),
+    matching 105.
+  - Returns `auto_login:true` on success, `needs_reauth:true` on token
+    failure (so the UI can show a "Login" button instead of looping).
+- **Applications page (item #2):** admin-gated `+ Add Application`,
+  admin-gated `Del` button, `tpRequireAdmin()` guard in
+  `deleteApplication` / `validateAppYAML` / `applyAppYAML`.
+- **Backups + Snapshots tables (item #3):**
+  - Added "Schedule Source" + "Reclaim Policy" columns (matching 105;
+    bumped table `colspan` 8→10).
+  - Admin-gated `+ Add Backup/Snapshot`, `Del` row button, and the YAML
+    validate/apply handlers.
+  - Added "Source Storage Classes" row to the view modal.
+  - `trident_protect.serialize_backup` / `serialize_snapshot` now return
+    `reclaimPolicy`, `scheduleSource`, `sourceStorageClasses`.
+  - Ported `_resolve_schedule_source` + `_derive_schedule_map` +
+    `get_source_storageclasses` from 105.
+- **DR page (item #4):** byte-identical to 105 (verified — 0 diff on
+  `disaster_recovery.html`). Cluster switch on the DR page now works
+  thanks to item #1.
+- **Restore page:** added admin/readonly button split for
+  "Restore Selected" (matching 105).
+
+### Deep button-by-button compare (105 OCP v1.4.3 vs 107 k8s v1.4.4)
+
+| Template | <button> | inline onclick | Match |
+| --- | --- | --- | --- |
+| `applications.html` | 11 | 9 | exact |
+| `backups.html` | 11 | 9 | exact |
+| `snapshots.html` | 11 | 9 | exact |
+| `disaster_recovery.html` | 28 | 27 | exact |
+| `settings_appvaults.html` | 5 | 6 | exact |
+| `settings_credentials.html` | 5 | 5 | exact |
+| `restore.html` | 6 | 5 | exact |
+| `settings_clusters.html` | 9 vs 8 | 11 vs 9 | intentional (k8s has kubeconfig import, no password login) |
+| `schedules.html` | 11 vs 13 | 9 | intentional gap (out of scope for this release) |
+
+Cluster profile switch: admin and readonly both confirmed
+`auto_login: true` on round-trip clus1 → clus2 → clus1 (no token paste).
+
+### Notes
+- 105 OCP v1.4.3 was not modified at any point (per user request).
+- All work performed on 10.10.101.107.
+- Stale `webui-cluster-<random8>` entries in `/root/.kube/config` on 107
+  were cleaned up; only the 2 stable `webui-<host>` entries remain.
+
+## [v1.4.3] — 2026-08-01
 # Changelog
 
 All notable changes to the Trident Protect Web UI — Kubernetes Edition.
