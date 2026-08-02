@@ -52,10 +52,10 @@
   <div id="dest-diff-section">
     <div class="filters">
       <label><span>Destination Namespace</span>
-        <select id="dest-ns"></select>
+        <select id="dest-ns" onchange="markFormChanged()"></select>
       </label>
       <label id="dest-app-row" style="display:none"><span>App Name <span class="text-muted">(optional, Backup only)</span></span>
-        <input id="dest-app" placeholder="auto-fill from source" />
+        <input id="dest-app" placeholder="auto-fill from source" onchange="markFormChanged()" />
       </label>
     </div>
   </div>
@@ -75,38 +75,26 @@
     </label>
   </div>
 
-  <div class="form-row" style="margin-top:12px">
-    <button class="btn" id="btn-restore" onclick="doRestoreForm()" disabled>Restore Selected</button>
-    <button class="btn secondary" onclick="loadYamlFromForm()" title="Copy the generated manifest into the YAML tab">Show as YAML</button>
-    <span id="restore-msg" style="margin-left:12px;color:#666"></span>
-  </div>
 </div>
 
-{# Card 4: Tabs (Form / YAML) #}
+{# Card 4: Restoration (single panel, YAML always visible, no tab) #}
 <div class="card">
-  <h2>4. Manifest</h2>
-  <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
-    <button class="form-tab active" id="restore-tab-form" onclick="switchRestoreTab('form')">Form</button>
-    <button class="form-tab" id="restore-tab-yaml" onclick="switchRestoreTab('yaml')">YAML</button>
+  <h2>4. Restoration</h2>
+  <p class="text-muted">YAML generated from the form selections in the previous steps.</p>
+
+  <div class="form-row" style="margin-top:12px">
+    <label style="flex:1"><span>Generated YAML</span>
+      <textarea id="restore-yaml" rows="18" style="font-family:var(--font-mono);font-size:12px;width:100%;" oninput="onYamlEdited()"></textarea>
+    </label>
   </div>
 
-  <div id="restore-form-tab">
-    <p class="text-muted">The form above populates the manifest. Use the YAML tab to inspect or hand-edit before applying.</p>
+  <div class="form-row" style="margin-top:12px">
+    <button class="btn secondary" id="btn-load" onclick="loadYamlFromForm()" title="Regenerate the YAML from the form selections">Load from form</button>
+    <button class="btn secondary" id="btn-validate" onclick="validateRestoreYAML()">Validate</button>
+    <button class="btn" id="btn-restore" onclick="applyRestoreYAML()" title="Run Load from form + Validate first" disabled>Restore</button>
   </div>
 
-  <div id="restore-yaml-tab" style="display:none">
-    <div class="form-row">
-      <label style="flex:1"><span>Manifest (editable — applied as-is)</span>
-        <textarea id="restore-yaml" rows="18" style="font-family:var(--font-mono);font-size:12px;width:100%;"></textarea>
-      </label>
-    </div>
-    <div class="form-row">
-      <button class="btn secondary" onclick="loadYamlFromForm()" title="Regenerate the YAML from the form (overwrites edits)">Load from form</button>
-      <button class="btn secondary" onclick="validateRestoreYAML()">Validate</button>
-      <button class="btn" onclick="applyRestoreYAML()">Apply YAML</button>
-    </div>
-    <div id="restore-yaml-msg" class="text-muted mt-1" style="min-height:18px;"></div>
-  </div>
+  <div id="restore-yaml-msg" class="text-muted mt-1" style="min-height:18px;"></div>
 </div>
 
 {# Card 5: History (unchanged shape, 4 kinds) #}
@@ -135,6 +123,44 @@
 <script>
 let allBackups = [], allSnapshots = [], destNsList = [];
 let allRestoreableByNsName = {};
+
+// v1.4.14: Validation state — Restore button is enabled only after the user clicks
+// Validate and it succeeds. Any form change resets this to false and regenerates the
+// YAML, but does NOT auto-validate (Validate must be clicked explicitly).
+let restoreValidated = false;
+
+function setRestoreButtonState() {
+  const btn = document.getElementById('btn-restore');
+  if (btn) btn.disabled = !restoreValidated;
+}
+
+function onYamlEdited() {
+  // User edited the YAML textarea manually — invalidate any prior validation.
+  // Restore is greyed out until Validate is run again.
+  restoreValidated = false;
+  setRestoreButtonState();
+  const msg = document.getElementById('restore-yaml-msg');
+  if (msg) {
+    msg.textContent = 'YAML modified — re-validate';
+    msg.style.color = 'var(--color-text-muted, #666)';
+  }
+}
+
+function markFormChanged() {
+  // Form changed → invalidate prior validation and regenerate the YAML.
+  // Restore stays disabled until the user clicks Validate (v1.4.14).
+  restoreValidated = false;
+  setRestoreButtonState();
+  loadYamlFromForm();
+  const msg = document.getElementById('restore-yaml-msg');
+  if (msg) {
+    const cb = document.querySelector('.item-cb:checked');
+    msg.textContent = cb
+      ? 'Form changed — click Validate to enable Restore'
+      : 'Select a source item to generate YAML';
+    msg.style.color = 'var(--color-text-muted, #666)';
+  }
+}
 
 async function load() {
   const [srcRes, destRes] = await Promise.all([
@@ -166,6 +192,8 @@ async function load() {
   onModeChange();
   filterItems();
   loadHistory();
+  // Initial Restore button state (disabled until validate succeeds)
+  setRestoreButtonState();
 }
 
 function getMode() {
@@ -185,6 +213,8 @@ function onModeChange() {
   // App Name input: only for cross-NS Backup (per the BackupRestore example).
   // For SnapshotRestore the example has no destinationApplicationName field.
   document.getElementById('dest-app-row').style.display = (isDiff && isBackup) ? '' : 'none';
+  // Form changed: re-load + re-validate (Restore enabled only on validate success)
+  markFormChanged();
 }
 
 function filterItems() {
@@ -263,8 +293,9 @@ function onItemSelect() {
       document.getElementById('src-apparchivepath').value = src.appArchivePath || '';
     }
   }
-  document.getElementById('restore-msg').textContent = cb
-    ? `1 item selected: ${cb.dataset.name}` : '';
+  // (restore-msg span removed in v1.4.10 — selection status shown in the YAML panel via Validate msg)
+  // Form changed: re-load + re-validate (Restore enabled only on validate success)
+  markFormChanged();
 }
 
 function buildRestoreYamlFromForm() {
@@ -291,8 +322,8 @@ function buildRestoreYamlFromForm() {
   //   - SnapshotRestore:      appArchivePath, appVaultRef, namespaceMapping
   //   - SnapshotInplaceRestore: appArchivePath, appVaultRef
   const spec = { appArchivePath: ap, appVaultRef: av };
+  const destNs = (mode === 'diff') ? (document.getElementById('dest-ns').value || ns) : ns;
   if (mode === 'diff') {
-    const destNs = document.getElementById('dest-ns').value || ns;
     const destApp = document.getElementById('dest-app').value.trim();
     if (isBackup && destApp) spec.destinationApplicationName = destApp;
     spec.namespaceMapping = [{source: ns, destination: destNs}];
@@ -305,35 +336,33 @@ function buildRestoreYamlFromForm() {
   return {
     apiVersion: 'protect.trident.netapp.io/v1',
     kind,
-    metadata: { name: crName, namespace: ns },
+    metadata: { name: crName, namespace: (mode === 'inplace') ? ns : destNs },
     spec,
   };
 }
 
-function switchRestoreTab(tab) {
-  const isForm = tab === 'form';
-  document.getElementById('restore-form-tab').style.display = isForm ? '' : 'none';
-  document.getElementById('restore-yaml-tab').style.display = isForm ? 'none' : '';
-  document.getElementById('restore-tab-form').classList.toggle('active', isForm);
-  document.getElementById('restore-tab-yaml').classList.toggle('active', !isForm);
-  if (!isForm) {
-    const ta = document.getElementById('restore-yaml');
-    if (!ta.value.trim()) loadYamlFromForm();
-  }
-}
-
 function loadYamlFromForm() {
   const doc = buildRestoreYamlFromForm();
-  if (!doc) { toast('Select a source item first', 'info'); return; }
   const ta = document.getElementById('restore-yaml');
+  if (!doc) {
+    if (ta) ta.value = '';
+    return Promise.resolve(null);
+  }
   ta.value = dumpYaml(doc);
-  switchRestoreTab('yaml');
-  toast('Loaded YAML from form (switched to YAML tab)', 'success');
+  return Promise.resolve(ta.value);
 }
 
 function dumpYaml(obj) {
   // Minimal YAML serializer (sufficient for the restore CRs we generate).
   const lines = [];
+  // Inline flow style for arrays of objects, matching the example YAMLs:
+  //   namespaceMapping: [{"source": "...", "destination": "..."}]
+  function flowObj(o) {
+    return '{' + Object.entries(o).map(([kk, vv]) => JSON.stringify(kk) + ': ' + JSON.stringify(vv)).join(', ') + '}';
+  }
+  function flowArr(arr) {
+    return '[' + arr.map(x => (x && typeof x === 'object' && !Array.isArray(x)) ? flowObj(x) : JSON.stringify(x)).join(', ') + ']';
+  }
   function dump(node, indent) {
     const pad = ' '.repeat(indent);
     if (Array.isArray(node)) {
@@ -365,7 +394,9 @@ function dumpYaml(obj) {
       for (const [k, v] of Object.entries(node)) {
         const hasChildren = (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0)
           || (Array.isArray(v) && v.length > 0 && v.some(x => x && typeof x === 'object'));
-        if (hasChildren) {
+        if (Array.isArray(v) && v.length > 0 && v.every(x => x && typeof x === 'object' && !Array.isArray(x))) {
+          lines.push(pad + k + ': ' + flowArr(v));
+        } else if (hasChildren) {
           lines.push(pad + k + ':');
           if (Array.isArray(v)) dump(v, indent + 2);
           else dump(v, indent + 2);
@@ -391,18 +422,11 @@ function quoteIfString(s) {
   return JSON.stringify(s);
 }
 
-async function doRestoreForm() {
-  if (!tpRequireAdmin()) return;
-  const cb = document.querySelector('.item-cb:checked');
-  if (!cb) { toast('Select an item first', 'info'); return; }
-  const doc = buildRestoreYamlFromForm();
-  if (!doc) return;
-  await doRestoreSubmit(doc);
-}
-
 async function validateRestoreYAML() {
   const yaml = document.getElementById('restore-yaml').value;
   const msg = document.getElementById('restore-yaml-msg');
+  restoreValidated = false;
+  setRestoreButtonState();
   if (!yaml.trim()) {
     msg.textContent = 'YAML is empty';
     msg.style.color = 'var(--color-error)';
@@ -414,18 +438,29 @@ async function validateRestoreYAML() {
       body: JSON.stringify({yaml}),
     });
     const r = await res.json();
-    msg.textContent = r.message;
+    msg.textContent = r.ok ? `✓ Valid — ${r.message}` : r.message;
     msg.style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
+    restoreValidated = !!r.ok;
+    setRestoreButtonState();
   } catch (e) {
     msg.textContent = 'Validate failed: ' + e.message;
     msg.style.color = 'var(--color-error)';
+    restoreValidated = false;
+    setRestoreButtonState();
   }
 }
 
 async function applyRestoreYAML() {
   if (!tpRequireAdmin()) return;
+  if (!restoreValidated) {
+    toast('Run Load from form + Validate first', 'error');
+    return;
+  }
   const yaml = document.getElementById('restore-yaml').value;
   if (!yaml.trim()) { toast('YAML is empty', 'error'); return; }
+  if (!confirm(`Apply this YAML?
+
+${yaml.split('\n').slice(0, 6).join('\n')}\n\n(Proceed with restore?)`)) return;
   try {
     const res = await tpFetch('/api/restore/apply', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -443,22 +478,6 @@ async function applyRestoreYAML() {
     }
   } catch (e) {
     toast('Apply failed: ' + e.message, 'error');
-  }
-}
-
-async function doRestoreSubmit(doc) {
-  try {
-    const res = await tpFetch('/api/restore/apply', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({yaml: dumpYaml(doc)}),
-    });
-    const r = await res.json();
-    toast(r.message, r.ok ? 'success' : 'error');
-    document.getElementById('restore-msg').textContent = r.message;
-    document.getElementById('restore-msg').style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
-    if (r.ok) setTimeout(() => { loadHistory(); }, 2000);
-  } catch (e) {
-    toast('Restore failed: ' + e.message, 'error');
   }
 }
 

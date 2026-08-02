@@ -1,3 +1,30 @@
+## [v1.4.14] — 2026-08-02
+
+### Changed — Restore: single panel + manual Validate gating + dest onchange (v1.4.9→v1.4.14)
+
+**Single restoration panel** (no Form/YAML tabs):
+- YAML always visible and editable; Load from form / Validate / Restore buttons
+- Any form change regenerates the YAML immediately
+
+**Manual Validate only** (v1.4.14):
+- `markFormChanged()` no longer auto-validates — the Restore button stays disabled
+  until the user clicks Validate and it succeeds
+- Muted hints: "Select a source item to generate YAML" / "Form changed — click Validate to enable Restore"
+- Manual YAML edit → "YAML modified — re-validate" (Restore disabled again)
+
+**Destination changes re-validate** (v1.4.14):
+- `#dest-ns` and `#dest-app` now fire `onchange="markFormChanged()"` — same behaviour
+  as changing the source namespace (reset validation + regenerate YAML)
+
+**CR generation fixes**:
+- `metadata.namespace` = destination ns (cross-NS) / source ns (inplace) (v1.4.12)
+- inline flow `namespaceMapping: [{"source": .., "destination": ..}]` matching the example YAMLs (v1.4.13)
+- inplace restore CLI: pin `-n <source_namespace>` so the CR lands in the source ns
+
+**Files changed (107 k8s)**:
+- `app/trident_protect.py` — `-n` on inplace restore triggers
+- `app/templates/restore.html` — single panel + validation gating + dest onchange
+
 ## [v1.4.8] — 2026-08-01
 
 ### Changed — Restore UX overhaul (mode radio first, no SC)

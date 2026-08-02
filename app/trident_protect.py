@@ -1363,11 +1363,14 @@ def trigger_backup_inplace(
 
     No destination namespace, no namespaceMapping, no storageclassMapping.
     The backup is restored back to the source namespace. Uses --backup to
-    let the CLI auto-resolve the AppVault + archive path.
+    let the CLI auto-resolve the AppVault + archive path, and -n to pin
+    the CR's metadata.namespace to the source namespace (otherwise the
+    CLI falls back to the kubectl context default, e.g. 'default').
     """
     args = [
         "create", "backupinplacerestore", f"restore-inplace-{backup_name}",
         "--backup", f"{source_namespace}/{backup_name}",
+        "-n", source_namespace,
     ]
     rc, out, err = _run(args, timeout=60)
     if rc == 0:
@@ -1383,11 +1386,14 @@ def trigger_snapshot_inplace(
 
     No destination namespace, no namespaceMapping, no storageclassMapping.
     The snapshot is restored back to the source namespace. Uses --snapshot
-    to let the CLI auto-resolve the AppVault + archive path.
+    to let the CLI auto-resolve the AppVault + archive path, and -n to pin
+    the CR's metadata.namespace to the source namespace (otherwise the
+    CLI falls back to the kubectl context default, e.g. 'default').
     """
     args = [
         "create", "snapshotinplacerestore", f"snap-inplace-{snapshot_name}",
         "--snapshot", f"{source_namespace}/{snapshot_name}",
+        "-n", source_namespace,
     ]
     rc, out, err = _run(args, timeout=60)
     if rc == 0:
