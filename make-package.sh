@@ -40,9 +40,10 @@ echo "  ✓ app/"
 
 # Scripts
 cp install.sh "$STAGING/"
+cp uninstall.sh "$STAGING/"
 cp run.sh "$STAGING/"
 cp stop.sh "$STAGING/"
-echo "  ✓ install.sh, run.sh, stop.sh"
+echo "  ✓ install.sh, uninstall.sh, run.sh, stop.sh"
 
 # Config template
 cp config.example.yaml "$STAGING/"
