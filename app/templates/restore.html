@@ -3,11 +3,29 @@
 {% block content %}
 <div class="page-header">
   <h1>Restore</h1>
-  <div class="subtitle">Restore backups or snapshots to a destination namespace (or in place)</div>
+  <div class="subtitle">Restore backups or snapshots (in place or to a different namespace)</div>
 </div>
 
+{# Card 1: Mode radio — picked FIRST #}
 <div class="card">
-  <h2>Source</h2>
+  <h2>1. Restore mode</h2>
+  <div class="form-row" style="gap:24px">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="radio" name="restore-mode" value="diff" checked onchange="onModeChange()" />
+      <b>Different namespace</b>
+      <span class="text-muted">(cross-NS: <code>BackupRestore</code> / <code>SnapshotRestore</code>)</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="radio" name="restore-mode" value="inplace" onchange="onModeChange()" />
+      <b>Same namespace — in place</b>
+      <span class="text-muted">(<code>BackupInplaceRestore</code> / <code>SnapshotInplaceRestore</code>)</span>
+    </label>
+  </div>
+</div>
+
+{# Card 2: Source #}
+<div class="card">
+  <h2>2. Source</h2>
   <div class="filters" style="margin-bottom:12px">
     <label><span>Namespace</span>
       <select id="src-ns" onchange="filterItems()"><option value="">-- all namespaces --</option></select>
@@ -26,65 +44,56 @@
   <div id="items-empty" style="display:none;color:#999;padding:12px 0">No completed backups or snapshots found.</div>
 </div>
 
+{# Card 3: Destination + auto-filled fields (per mode) #}
 <div class="card">
-  <h2>Destination</h2>
-  <div class="filters">
-    <label><span>Mode</span>
-      <select id="dest-mode" onchange="onModeChange()">
-        <option value="diff">Different namespace (cross-NS)</option>
-        <option value="inplace">Same namespace — in place (BackupInplaceRestore / SnapshotInplaceRestore)</option>
-      </select>
-    </label>
-  </div>
+  <h2>3. Destination</h2>
 
-  <div id="dest-diff-section" style="margin-top:12px">
+  {# Only for cross-NS #}
+  <div id="dest-diff-section">
     <div class="filters">
       <label><span>Destination Namespace</span>
         <select id="dest-ns"></select>
       </label>
-      <label><span>App Name <span class="text-muted">(optional)</span></span>
+      <label id="dest-app-row" style="display:none"><span>App Name <span class="text-muted">(optional, Backup only)</span></span>
         <input id="dest-app" placeholder="auto-fill from source" />
       </label>
     </div>
-    <div id="sc-mapping-section" style="margin-top:12px;display:none">
-      <h4 style="margin:0 0 8px 0;font-size:13px">StorageClass Mapping</h4>
-      <div id="sc-mapping-rows"></div>
-      <div id="sc-mapping-status" style="margin-top:8px;font-size:12px;color:#999"></div>
-    </div>
-    <div style="margin-top:12px">
-      <label><span>Default StorageClass <span class="text-muted">(used when source SC is Unknown)</span></span>
-        <select id="dest-sc"></select>
-      </label>
-    </div>
   </div>
 
-  <div style="margin-top:12px">
-    <label><span>AppVault <span class="text-muted">(auto-filled, readonly)</span></span>
+  {# Only for inplace #}
+  <div id="dest-inplace-note" style="display:none;color:#666;font-size:12px;padding:6px 0">
+    <i>Restores in the source namespace. No destination needed.</i>
+  </div>
+
+  {# Auto-filled readonly (always shown) #}
+  <div class="filters" style="margin-top:8px">
+    <label><span>AppVault <span class="text-muted">(auto-filled)</span></span>
       <input id="src-appvault" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
     </label>
-    <label style="margin-top:6px"><span>AppArchivePath <span class="text-muted">(auto-filled, readonly)</span></span>
+    <label><span>AppArchivePath <span class="text-muted">(auto-filled)</span></span>
       <input id="src-apparchivepath" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
     </label>
   </div>
+
+  <div class="form-row" style="margin-top:12px">
+    <button class="btn" id="btn-restore" onclick="doRestoreForm()" disabled>Restore Selected</button>
+    <button class="btn secondary" onclick="loadYamlFromForm()" title="Copy the generated manifest into the YAML tab">Show as YAML</button>
+    <span id="restore-msg" style="margin-left:12px;color:#666"></span>
+  </div>
 </div>
 
-<!-- Tabs: Form / YAML -->
+{# Card 4: Tabs (Form / YAML) #}
 <div class="card">
+  <h2>4. Manifest</h2>
   <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
     <button class="form-tab active" id="restore-tab-form" onclick="switchRestoreTab('form')">Form</button>
     <button class="form-tab" id="restore-tab-yaml" onclick="switchRestoreTab('yaml')">YAML</button>
   </div>
 
-  <!-- Form tab: contains the Restore Selected button + a hidden YAML preview -->
   <div id="restore-form-tab">
-    <div class="form-row">
-      <button class="btn" id="btn-restore" onclick="doRestoreForm()" disabled>Restore Selected</button>
-      <button class="btn secondary" onclick="loadYamlFromForm()" title="Copy the generated manifest into the YAML tab">Show as YAML</button>
-      <span id="restore-msg" style="margin-left:12px;color:#666"></span>
-    </div>
+    <p class="text-muted">The form above populates the manifest. Use the YAML tab to inspect or hand-edit before applying.</p>
   </div>
 
-  <!-- YAML tab: editable textarea + Validate / Apply -->
   <div id="restore-yaml-tab" style="display:none">
     <div class="form-row">
       <label style="flex:1"><span>Manifest (editable — applied as-is)</span>
@@ -100,6 +109,7 @@
   </div>
 </div>
 
+{# Card 5: History (unchanged shape, 4 kinds) #}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center">
     <h2 style="margin:0">Restore History</h2>
@@ -123,8 +133,8 @@
 
 {% block scripts %}
 <script>
-let allBackups = [], allSnapshots = [], destNsList = [], destScList = [];
-let allRestoreableByNsName = {};   // key "Type/ns/name" -> { appArchivePath, appVaultRef, applicationRef, ... }
+let allBackups = [], allSnapshots = [], destNsList = [];
+let allRestoreableByNsName = {};
 
 async function load() {
   const [srcRes, destRes] = await Promise.all([
@@ -136,9 +146,7 @@ async function load() {
   allBackups = src.backups || [];
   allSnapshots = src.snapshots || [];
   destNsList = dest.namespaces || [];
-  destScList = dest.storageclasses || [];
 
-  // Index source items by Type/ns/name so the form can auto-fill AppVault + ArchivePath
   allRestoreableByNsName = {};
   for (const b of allBackups) {
     allRestoreableByNsName[`Backup/${b.namespace}/${b.name}`] = b;
@@ -155,31 +163,36 @@ async function load() {
     `<option value="${n}">${n}</option>`
   ).join('');
 
-  document.getElementById('dest-sc').innerHTML = destScList.map(s =>
-    `<option value="${s}">${s}</option>`
-  ).join('');
-
   onModeChange();
   filterItems();
   loadHistory();
 }
 
+function getMode() {
+  return document.querySelector('input[name="restore-mode"]:checked').value;
+}
+
+function getSourceType() {
+  return document.querySelector('input[name="src-type"]:checked').value;
+}
+
 function onModeChange() {
-  const mode = document.getElementById('dest-mode').value;
-  const diffSection = document.getElementById('dest-diff-section');
-  const scSection = document.getElementById('sc-mapping-section');
-  if (mode === 'inplace') {
-    diffSection.style.display = 'none';
-    // sc-mapping is part of diff-section and already hidden above
-  } else {
-    diffSection.style.display = '';
-    // SC mapping section is shown/hidden by rebuildScMapping() based on selection
-  }
+  const mode = getMode();
+  const isDiff = (mode === 'diff');
+  const isBackup = (getSourceType() === 'Backup');
+  document.getElementById('dest-diff-section').style.display = isDiff ? '' : 'none';
+  document.getElementById('dest-inplace-note').style.display = isDiff ? 'none' : '';
+  // App Name input: only for cross-NS Backup (per the BackupRestore example).
+  // For SnapshotRestore the example has no destinationApplicationName field.
+  document.getElementById('dest-app-row').style.display = (isDiff && isBackup) ? '' : 'none';
 }
 
 function filterItems() {
+  // When source type changes, the App Name visibility may need to refresh.
+  onModeChange();
+
   const ns = document.getElementById('src-ns').value;
-  const type = document.querySelector('input[name="src-type"]:checked').value;
+  const type = getSourceType();
   let items;
   if (type === 'Backup') {
     items = allBackups.map(b => ({...b, _type: 'Backup'}));
@@ -206,14 +219,11 @@ function filterItems() {
     + '<th style="padding:6px 8px">Namespace</th>'
     + '<th style="padding:6px 8px">App</th>'
     + '<th style="padding:6px 8px">State</th>'
-    + '<th style="padding:6px 8px">Created</th>'
-    + '<th style="padding:6px 8px">Source SC</th></tr>';
+    + '<th style="padding:6px 8px">Created</th></tr>';
   const sorted = items.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
   for (const item of sorted) {
     const stateBadge = item.stateClass === 'success' ? '🟢'
       : item.stateClass === 'error' ? '🔴' : '🟡';
-    const scs = item.sourceStorageClasses || [];
-    const scText = scs.length ? scs.join(', ') : '<span style="color:#999">Unknown</span>';
     html += `<tr style="border-bottom:1px solid #222;cursor:pointer" onclick="toggleItem(this)" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}">
       <td style="padding:6px 8px"><input type="radio" name="restore-item" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="onItemSelect()" /></td>
       <td style="padding:6px 8px;font-family:monospace">${item.name}</td>
@@ -221,7 +231,6 @@ function filterItems() {
       <td style="padding:6px 8px">${item.applicationRef||'-'}</td>
       <td style="padding:6px 8px">${stateBadge} ${item.state}</td>
       <td style="padding:6px 8px;color:#999">${item.created}</td>
-      <td style="padding:6px 8px;font-family:monospace;font-size:12px">${scText}</td>
     </tr>`;
   }
   html += '</table>';
@@ -241,162 +250,55 @@ function onItemSelect() {
   btn.disabled = !cb;
   if (cb) {
     const firstApp = cb.dataset.app;
-    if (firstApp && !document.getElementById('dest-app').value) {
+    // Only auto-fill App Name if the field is currently visible AND empty.
+    const appRow = document.getElementById('dest-app-row');
+    if (appRow.style.display !== 'none' && firstApp && !document.getElementById('dest-app').value) {
       document.getElementById('dest-app').value = firstApp;
     }
-    // Auto-fill AppVault + AppArchivePath from the selected source item
+    // Auto-fill AppVault + AppArchivePath (always visible, readonly).
     const key = `${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`;
     const src = allRestoreableByNsName[key];
     if (src) {
-      const av = document.getElementById('src-appvault');
-      const ap = document.getElementById('src-apparchivepath');
-      av.value = src.appVaultRef || src.appvault || '';
-      ap.value = src.appArchivePath || '';
+      document.getElementById('src-appvault').value = src.appVaultRef || src.appvault || '';
+      document.getElementById('src-apparchivepath').value = src.appArchivePath || '';
     }
   }
   document.getElementById('restore-msg').textContent = cb
     ? `1 item selected: ${cb.dataset.name}` : '';
-  if (document.getElementById('dest-mode').value === 'diff') {
-    rebuildScMapping();
-  }
 }
 
-function getSelectedItems() {
-  const cbs = document.querySelectorAll('.item-cb:checked');
-  const items = [];
-  for (const cb of cbs) {
-    const ns = cb.dataset.ns;
-    const name = cb.dataset.name;
-    const type = cb.dataset.type;
-    const src = (type === 'Backup' ? allBackups : allSnapshots).find(x => x.namespace === ns && x.name === name);
-    if (src) items.push(src);
-  }
-  return items;
-}
-
-function rebuildScMapping() {
-  if (document.getElementById('dest-mode').value !== 'diff') return;
-  const selected = getSelectedItems();
-  const destScList = Array.from(document.getElementById('dest-sc').options).map(o => o.value);
-  const section = document.getElementById('sc-mapping-section');
-  const rows = document.getElementById('sc-mapping-rows');
-  const status = document.getElementById('sc-mapping-status');
-
-  if (!selected.length) {
-    section.style.display = 'none';
-    rows.innerHTML = '';
-    status.textContent = '';
-    return;
-  }
-
-  const scSet = new Set();
-  let unknownCount = 0;
-  for (const item of selected) {
-    const scs = item.sourceStorageClasses || [];
-    if (scs.length === 0) {
-      unknownCount += 1;
-    } else {
-      for (const sc of scs) scSet.add(sc);
-    }
-  }
-
-  if (scSet.size === 0) {
-    section.style.display = 'none';
-    status.textContent = `⚠ All ${unknownCount} selected item(s) have unknown source SC — will use Default StorageClass.`;
-    status.style.color = '#f59e0b';
-    return;
-  }
-
-  section.style.display = '';
-  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="color:#999;text-align:left;border-bottom:1px solid #333">'
-    + '<th style="padding:4px 8px">Source SC</th>'
-    + '<th style="padding:4px 8px;width:24px"></th>'
-    + '<th style="padding:4px 8px">Destination SC</th></tr>';
-  const sorted = Array.from(scSet).sort();
-  for (const srcSc of sorted) {
-    html += `<tr style="border-bottom:1px solid #222">
-      <td style="padding:6px 8px;font-family:monospace">${srcSc}</td>
-      <td style="padding:6px 8px;color:#999">→</td>
-      <td style="padding:6px 8px">
-        <select class="sc-map-dest" data-src="${srcSc}" style="padding:3px 6px">
-          ${destScList.map(s => `<option value="${s}">${s}</option>`).join('')}
-        </select>
-        <span class="sc-map-note" style="margin-left:8px;font-size:11px;color:#999"></span>
-      </td>
-    </tr>`;
-  }
-  html += '</table>';
-  rows.innerHTML = html;
-  refreshMappingStatus();
-}
-
-function refreshMappingStatus() {
-  const status = document.getElementById('sc-mapping-status');
-  const selected = document.querySelectorAll('.sc-map-dest');
-  if (!selected.length) { status.textContent = ''; return; }
-  let needed = [];
-  let skipped = [];
-  for (const sel of selected) {
-    const src = sel.dataset.src;
-    const dest = sel.value;
-    if (src === dest) skipped.push(src);
-    else needed.push(`${src} → ${dest}`);
-  }
-  if (needed.length === 0) {
-    status.textContent = `✓ No SC mapping needed (${skipped.length} source SC(s) match destination).`;
-    status.style.color = '#22c55e';
-  } else {
-    status.textContent = `⚠ Mapping required: ${needed.join(', ')}`;
-    status.style.color = '#f59e0b';
-  }
-}
-
-document.getElementById('sc-mapping-rows').addEventListener('change', e => {
-  if (e.target.classList && e.target.classList.contains('sc-map-dest')) {
-    refreshMappingStatus();
-  }
-});
-
-// ---- Build YAML from form ----
 function buildRestoreYamlFromForm() {
   const cb = document.querySelector('.item-cb:checked');
   if (!cb) return null;
   const src = allRestoreableByNsName[`${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`];
   if (!src) return null;
-  const mode = document.getElementById('dest-mode').value;
+
+  const mode = getMode();
   const type = cb.dataset.type;
   const isBackup = (type === 'Backup');
   const kind = mode === 'inplace'
     ? (isBackup ? 'BackupInplaceRestore'  : 'SnapshotInplaceRestore')
     : (isBackup ? 'BackupRestore'         : 'SnapshotRestore');
+
   const name = cb.dataset.name;
   const ns = cb.dataset.ns;
-  const av = document.getElementById('src-appvault').value || src.appVaultRef || 'ontap-s3-appvault';
+  const av = document.getElementById('src-appvault').value || src.appVaultRef || src.appvault || 'ontap-s3-appvault';
   const ap = document.getElementById('src-apparchivepath').value || src.appArchivePath || '';
 
+  // Per the 4 example YAMLs in /root/example/:
+  //   - BackupRestore:        appArchivePath, appVaultRef, destinationApplicationName (opt), namespaceMapping
+  //   - BackupInplaceRestore: appArchivePath, appVaultRef
+  //   - SnapshotRestore:      appArchivePath, appVaultRef, namespaceMapping
+  //   - SnapshotInplaceRestore: appArchivePath, appVaultRef
   const spec = { appArchivePath: ap, appVaultRef: av };
   if (mode === 'diff') {
     const destNs = document.getElementById('dest-ns').value || ns;
     const destApp = document.getElementById('dest-app').value.trim();
-    const mapSels = document.querySelectorAll('.sc-map-dest');
-    const mappingParts = [];
-    for (const sel of mapSels) {
-      const s = sel.dataset.src;
-      const d = sel.value;
-      if (s && d && s !== d) mappingParts.push(`${s}:${d}`);
-    }
-    const storageclassMapping = mappingParts.length ? Array.from(new Set(mappingParts)).join(',') : '';
-    if (destApp) spec.destinationApplicationName = destApp;
-    if (storageclassMapping) {
-      spec.storageclassMapping = storageclassMapping;
-    } else {
-      const destScDefault = document.getElementById('dest-sc').value;
-      if (destScDefault) spec.storageclassMapping = `${destScDefault}:${destScDefault}`;
-    }
+    if (isBackup && destApp) spec.destinationApplicationName = destApp;
     spec.namespaceMapping = [{source: ns, destination: destNs}];
   }
-  // If the source item has a known name, use it; otherwise derive from the CR kind
+
+  // CR name follows the CLI's default naming convention.
   const crName = (mode === 'inplace')
     ? `${isBackup ? 'restore-inplace' : 'snap-inplace'}-${name}`
     : `${isBackup ? 'restore' : 'snapshot-restore'}-${name}`;
@@ -415,7 +317,6 @@ function switchRestoreTab(tab) {
   document.getElementById('restore-tab-form').classList.toggle('active', isForm);
   document.getElementById('restore-tab-yaml').classList.toggle('active', !isForm);
   if (!isForm) {
-    // Switching TO yaml: load the form's current YAML if the textarea is empty
     const ta = document.getElementById('restore-yaml');
     if (!ta.value.trim()) loadYamlFromForm();
   }
@@ -423,14 +324,9 @@ function switchRestoreTab(tab) {
 
 function loadYamlFromForm() {
   const doc = buildRestoreYamlFromForm();
-  if (!doc) {
-    toast('Select a source item first', 'info');
-    return;
-  }
-  const yamlStr = dumpYaml(doc);
+  if (!doc) { toast('Select a source item first', 'info'); return; }
   const ta = document.getElementById('restore-yaml');
-  ta.value = yamlStr;
-  // Also switch to the YAML tab so the user can see the result
+  ta.value = dumpYaml(doc);
   switchRestoreTab('yaml');
   toast('Loaded YAML from form (switched to YAML tab)', 'success');
 }
@@ -448,9 +344,9 @@ function dumpYaml(obj) {
           lines.push(pad + '-');
           for (let i = 0; i < entries.length; i++) {
             const [k, val] = entries[i];
-            const isLast = (i === entries.length - 1);
-            const suffix = (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0) ? '' : '';
-            lines.push(pad + '  ' + k + ':' + suffix);
+            const hasChildren = (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0)
+              || (Array.isArray(val) && val.length > 0 && val.some(x => x && typeof x === 'object'));
+            lines.push(pad + '  ' + k + (hasChildren ? ':' : ' ' + (typeof val === 'string' ? quoteIfString(val) : JSON.stringify(val))));
             if (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0) {
               dump(val, indent + 4);
             } else if (Array.isArray(val) && val.length > 0) {
@@ -459,12 +355,6 @@ function dumpYaml(obj) {
               } else {
                 dump(val, indent + 4);
               }
-            } else if (val === null || val === undefined) {
-              lines.push(pad + '  ' + k + ': null');
-            } else if (typeof val === 'string') {
-              lines.push(pad + '  ' + k + ': ' + quoteIfString(val));
-            } else {
-              lines.push(pad + '  ' + k + ': ' + JSON.stringify(val));
             }
           }
         } else {
@@ -473,16 +363,12 @@ function dumpYaml(obj) {
       }
     } else if (node && typeof node === 'object') {
       for (const [k, v] of Object.entries(node)) {
-        if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0) {
+        const hasChildren = (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0)
+          || (Array.isArray(v) && v.length > 0 && v.some(x => x && typeof x === 'object'));
+        if (hasChildren) {
           lines.push(pad + k + ':');
-          dump(v, indent + 2);
-        } else if (Array.isArray(v) && v.length > 0) {
-          if (v.every(x => x && typeof x !== 'object')) {
-            lines.push(pad + k + ': [' + v.map(quoteIfString).join(', ') + ']');
-          } else {
-            lines.push(pad + k + ':');
-            dump(v, indent + 2);
-          }
+          if (Array.isArray(v)) dump(v, indent + 2);
+          else dump(v, indent + 2);
         } else if (v === null || v === undefined) {
           lines.push(pad + k + ': null');
         } else if (typeof v === 'string') {
@@ -498,7 +384,6 @@ function dumpYaml(obj) {
 }
 
 function quoteIfString(s) {
-  // Quote strings that contain special chars or look like reserved words.
   if (typeof s !== 'string') return JSON.stringify(s);
   if (/^[A-Za-z0-9_\-./:@%]+$/.test(s) && !['true','false','null','yes','no','on','off'].includes(s.toLowerCase())) {
     return s;
@@ -542,8 +427,6 @@ async function applyRestoreYAML() {
   const yaml = document.getElementById('restore-yaml').value;
   if (!yaml.trim()) { toast('YAML is empty', 'error'); return; }
   try {
-    // Parse and run via the proper endpoint based on kind.
-    // We try to identify the kind from the YAML and route accordingly.
     const res = await tpFetch('/api/restore/apply', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({yaml}),
@@ -564,15 +447,6 @@ async function applyRestoreYAML() {
 }
 
 async function doRestoreSubmit(doc) {
-  // doc: a parsed restore CR object. Route based on kind to the right endpoint.
-  const kind = doc.kind;
-  const isInplace = kind.endsWith('InplaceRestore');
-  const type = kind.startsWith('Backup') ? 'Backup' : 'Snapshot';
-  const ns = doc.metadata.namespace;
-  const name = doc.spec.appArchivePath && doc.spec.appArchivePath.split('/').pop()
-              || (doc.metadata.name || '').replace(/^restore-inplace-/, '').replace(/^snap-inplace-/, '').replace(/^restore-/, '').replace(/^snapshot-restore-/, '');
-  // Better: use the source item key from the form (caller passes it).
-  // For simplicity, we'll just rely on the YAML apply path (handles all 4 kinds).
   try {
     const res = await tpFetch('/api/restore/apply', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -582,9 +456,7 @@ async function doRestoreSubmit(doc) {
     toast(r.message, r.ok ? 'success' : 'error');
     document.getElementById('restore-msg').textContent = r.message;
     document.getElementById('restore-msg').style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
-    if (r.ok) {
-      setTimeout(() => { loadHistory(); }, 2000);
-    }
+    if (r.ok) setTimeout(() => { loadHistory(); }, 2000);
   } catch (e) {
     toast('Restore failed: ' + e.message, 'error');
   }
@@ -678,9 +550,6 @@ function renderViewRestoreModal(r, yamlText, type) {
   if (sp.namespaceMapping) {
     const nm = Array.isArray(sp.namespaceMapping) ? sp.namespaceMapping : [sp.namespaceMapping];
     html += `<tr><td style="padding:4px 8px;color:#999">Namespace Mapping</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${nm.map(m => `${m.source || m[0]} → ${m.destination || m[1]}`).join(', ')}</td></tr>`;
-  }
-  if (sp.storageclassMapping) {
-    html += `<tr><td style="padding:4px 8px;color:#999">SC Mapping</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${sp.storageclassMapping}</td></tr>`;
   }
   html += '</table>';
   html += '<h4 style="margin:12px 0 8px 0;font-size:13px">Status</h4><table style="font-size:13px;width:100%">';

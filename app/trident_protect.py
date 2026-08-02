@@ -263,7 +263,7 @@ def serialize_backup(b: dict, context: str | None = None, schedule_map: dict | N
         "scheduleSource": _resolve_schedule_source(
             md.get("name", ""), md.get("labels", {}) or {}, schedule_map
         ),
-        "sourceStorageClasses": [],  # see get_source_storageclasses() — only resolved on view (per-CR)
+        # sourceStorageClasses removed (v1.4.8) — restore flow no longer uses SC
     }
 
 
@@ -286,7 +286,7 @@ def serialize_snapshot(s: dict, context: str | None = None, schedule_map: dict |
         "scheduleSource": _resolve_schedule_source(
             md.get("name", ""), md.get("labels", {}) or {}, schedule_map
         ),
-        "sourceStorageClasses": [],  # only resolved on view (per-CR)
+        # sourceStorageClasses removed (v1.4.8) — restore flow no longer uses SC
     }
 
 
@@ -1302,7 +1302,6 @@ def trigger_backup_restore(
     appvault: str,
     app_archive_path: str,
     destination_app_name: str | None = None,
-    storageclass_mapping: str | None = None,
 ) -> tuple[bool, str]:
     """Trigger BackupRestore via CLI.
 
@@ -1318,8 +1317,6 @@ def trigger_backup_restore(
     ]
     if destination_app_name:
         args += ["--destination-app-name", destination_app_name]
-    if storageclass_mapping:
-        args += ["--storageclass-mapping", storageclass_mapping]
 
     rc, out, err = _run(args)
     if rc == 0:
@@ -1334,7 +1331,6 @@ def trigger_snapshot_restore(
     appvault: str,
     app_archive_path: str,
     destination_app_name: str | None = None,
-    storageclass_mapping: str | None = None,
 ) -> tuple[bool, str]:
     """Trigger SnapshotRestore via CLI.
 
@@ -1350,8 +1346,6 @@ def trigger_snapshot_restore(
     ]
     if destination_app_name:
         args += ["--destination-app-name", destination_app_name]
-    if storageclass_mapping:
-        args += ["--storageclass-mapping", storageclass_mapping]
 
     rc, out, err = _run(args)
     if rc == 0:

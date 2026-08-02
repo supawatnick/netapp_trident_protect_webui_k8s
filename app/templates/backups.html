@@ -114,7 +114,6 @@
         <tr><td><b>AppVault</b></td><td id="vb-appvault">—</td></tr>
         <tr><td><b>Reclaim Policy</b></td><td id="vb-reclaim">—</td></tr>
         <tr><td><b>Data Mover</b></td><td id="vb-datamover">—</td></tr>
-        <tr><td><b>Source Storage Classes</b></td><td id="vb-source-scs" class="text-mono">—</td></tr>
       </tbody>
     </table>
 
@@ -211,33 +210,6 @@ async function deleteBackup(ns, name) {
   const r = await res.json();
   toast(r.ok ? 'Deleted' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
   loadBackups();
-}
-
-// ---- Restore ----
-async function restoreBackup(ns, name) {
-  const destNs = prompt(`Restore ${ns}/${name} to which namespace?`, ns + '-restore');
-  if (!destNs) return;
-  try {
-    const bRes = await fetch(`/api/backup/${ns}/${name}`);
-    const b = await bRes.json();
-    const archivePath = (b.status || {}).appArchivePath || b.appArchivePath;
-    if (!archivePath) {
-      toast('Backup has no appArchivePath', 'error');
-      return;
-    }
-    const res = await fetch(`/api/backup/${ns}/${name}/backuprestores`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        destination_namespace: destNs,
-        appArchivePath: archivePath,
-        destinationApplicationName: name + '-restored',
-      }),
-    });
-    const r = await res.json();
-    toast(r.ok ? 'Restore triggered' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
-  } catch (e) {
-    toast('Restore failed: ' + e.message, 'error');
-  }
 }
 
 // ---- Add Backup modal ----
@@ -417,9 +389,6 @@ function renderViewBackupModal(b, yamlText) {
   document.getElementById('vb-appvault').textContent = sp.appVaultRef || '—';
   document.getElementById('vb-reclaim').textContent = sp.reclaimPolicy || '—';
   document.getElementById('vb-datamover').textContent = sp.dataMover || '—';
-  // Source storage classes: resolved server-side via /api/backup/<ns>/<name>?format=summary
-  const scs = b.sourceStorageClasses || [];
-  document.getElementById('vb-source-scs').textContent = scs.length ? scs.join(', ') : '—';
 
   document.getElementById('vb-state').innerHTML = stateBadge(st.state || 'Unknown');
   document.getElementById('vb-archive-path').textContent = st.appArchivePath || '—';

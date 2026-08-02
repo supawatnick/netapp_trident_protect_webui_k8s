@@ -524,7 +524,7 @@ def register_routes(app: Flask) -> None:
             appvault=appvault,
             app_archive_path=app_archive_path,
             destination_app_name=body.get("destinationApplicationName"),
-            storageclass_mapping=body.get("storageclassMapping"),
+            # storageclass_mapping removed (v1.4.8)
         )
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
@@ -549,7 +549,7 @@ def register_routes(app: Flask) -> None:
             appvault=appvault,
             app_archive_path=app_archive_path,
             destination_app_name=body.get("destinationApplicationName"),
-            storageclass_mapping=body.get("storageclassMapping"),
+            # storageclass_mapping removed (v1.4.8)
         )
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 

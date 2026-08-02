@@ -112,7 +112,6 @@
         <tr><td><b>Reclaim Policy</b></td><td id="vs-reclaim">—</td></tr>
         <tr><td><b>Cleanup Snapshot</b></td><td id="vs-cleanup">—</td></tr>
         <tr><td><b>Replicate Reclaim</b></td><td id="vs-replicate-reclaim">—</td></tr>
-        <tr><td><b>Source Storage Classes</b></td><td id="vs-source-scs" class="text-mono">—</td></tr>
       </tbody>
     </table>
 
@@ -212,33 +211,6 @@ async function deleteSnap(ns, name) {
   const r = await res.json();
   toast(r.ok ? 'Deleted' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
   loadSnapshots();
-}
-
-// ---- Restore ----
-async function restoreSnap(ns, name) {
-  const destNs = prompt(`Restore ${ns}/${name} to which namespace?`, ns + '-restore-snap');
-  if (!destNs) return;
-  try {
-    const sRes = await fetch(`/api/snapshot/${ns}/${name}`);
-    const s = await sRes.json();
-    const archivePath = (s.status || {}).appArchivePath || s.appArchivePath;
-    if (!archivePath) {
-      toast('Snapshot has no appArchivePath', 'error');
-      return;
-    }
-    const res = await fetch(`/api/snapshot/${ns}/${name}/snapshotrestores`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        destination_namespace: destNs,
-        appArchivePath: archivePath,
-        destinationApplicationName: name + '-restored',
-      }),
-    });
-    const r = await res.json();
-    toast(r.ok ? 'Snapshot restore triggered' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
-  } catch (e) {
-    toast('Restore failed: ' + e.message, 'error');
-  }
 }
 
 // ---- Add Snapshot modal ----

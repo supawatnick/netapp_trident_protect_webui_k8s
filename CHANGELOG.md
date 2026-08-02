@@ -1,3 +1,57 @@
+## [v1.4.8] — 2026-08-01
+
+### Changed — Restore UX overhaul (mode radio first, no SC)
+
+**New restore page layout** (mode radio picked FIRST, per user request):
+
+```
+1. Restore mode    ◉ Different namespace   ○ Same namespace — in place
+2. Source          Type + Namespace + items list (no Source SC column)
+3. Destination     Per-mode fields + auto-filled AppVault/AppArchivePath
+4. Manifest        [Form]  [YAML] (editable + Validate + Apply)
+5. History         4-kind types
+```
+
+The mode radio at the top drives which fields appear in Destination:
+- **Different namespace** (default): Destination NS dropdown + optional App Name (Backup only).
+- **Same namespace — in place**: just shows a note + the auto-filled AppVault/AppArchivePath.
+
+**Removed everywhere**:
+- SC mapping section (`sc-mapping-section`, `sc-mapping-rows`, `sc-mapping-status`)
+- Default StorageClass dropdown
+- Source SC column in items list
+- Source Storage Classes row in view modals (Backups + Snapshots + Restores)
+- `--storageclass-mapping` CLI flag from `trigger_backup_restore` / `trigger_snapshot_restore`
+- `sourceStorageClasses` field from `serialize_backup` / `serialize_snapshot`
+- Inline `restoreBackup` / `restoreSnap` functions and "Restore" buttons from
+  Backups and Snapshots pages. All restore activity now happens on `/restore`
+  only (via the Form or YAML tab).
+
+**Form→YAML generator** now produces manifests matching the 4 example YAMLs
+in `/root/example/*.yaml` exactly — no `storageclassMapping`, no extra fields:
+- BackupRestore:         `appArchivePath, appVaultRef, destinationApplicationName?, namespaceMapping`
+- BackupInplaceRestore:  `appArchivePath, appVaultRef`
+- SnapshotRestore:       `appArchivePath, appVaultRef, namespaceMapping`
+- SnapshotInplaceRestore: `appArchivePath, appVaultRef`
+
+**Files changed (107 k8s)**:
+- `app/trident_protect.py` — drop SC args/flags/fields from `trigger_*_restore`,
+  drop `sourceStorageClasses` from serializers
+- `app/main.py` — drop `storageclassMapping` body field from cross-NS endpoints
+- `app/templates/restore.html` — full rewrite (596 lines, was 727)
+- `app/templates/backups.html` — drop Source SC view row + JS + dead `restoreBackup` fn
+- `app/templates/snapshots.html` — drop Source SC view row + dead `restoreSnap` fn
+
+**Verified live on 107**:
+- `GET /restore` (admin): mode radio visible, 17 references; (viewer): 5 references (admin-gated buttons hidden)
+- `POST /api/backup/.../backuprestores` (admin): 200 OK
+- `POST /api/snapshot/.../inplacerestore` (admin): 200 OK
+- `POST /api/restore/validate`: accepts all 4 kinds
+- `GET /api/restores`: all 4 kinds, no `sourceStorageClasses` field
+- 12 page routes all return 200 ✓
+- backups/snapshots pages: no inline Restore button, no Source SC row
+
+## [v1.4.7] — 2026-08-01
 ## [v1.4.7] — 2026-08-01
 
 ### Added — Restore with all 4 kinds + Form/YAML tabs
