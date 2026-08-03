@@ -1,3 +1,11 @@
+## [v1.4.16] — 2026-08-03
+
+### Changed
+- Aligned version with OCP edition (v1.4.16)
+- Fixed `login.html` version banner (was still v1.4.14)
+
+---
+
 ## [v1.4.14] — 2026-08-02
 
 ### Changed — Restore: single panel + manual Validate gating + dest onchange (v1.4.9→v1.4.14)
