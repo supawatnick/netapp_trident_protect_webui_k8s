@@ -297,7 +297,6 @@
     <div id="rwiz-panel-3" class="rwiz-panel" style="display:none;"></div>
     <div id="rwiz-panel-4" class="rwiz-panel" style="display:none;"></div>
     <div id="rwiz-panel-5" class="rwiz-panel" style="display:none;"></div>
-    <div id="rwiz-panel-6" class="rwiz-panel" style="display:none;"></div>
     <div class="modal-footer">
       <button class="btn secondary" onclick="hideWizardModal()">Close</button>
       <button class="btn" id="rwiz-recheck-btn" onclick="refreshWizardState()">Re-check</button>
@@ -1128,7 +1127,7 @@ async function refreshWizardState() {
 
 function renderWizardIndicator() {
   const ind = document.getElementById('rwiz-step-indicator');
-  const labels = ['1. Failover', '2. Snapshot/Schedule', '3. Disable Schedules', '4. Dest Baseline', '5. Delete AMR', '6. Finish'];
+  const labels = ['1. Failover', '2. Disable Schedules', '3. Dest Baseline', '4. Delete AMR', '5. Finish'];
   ind.innerHTML = labels.map((l, i) => {
     const n = i + 1;
     let color = '#999';
@@ -1142,17 +1141,16 @@ function renderWizardIndicator() {
 
 function renderWizardPanel() {
   renderWizardIndicator();
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 5; i++) {
     document.getElementById('rwiz-panel-' + i).style.display = 'none';
   }
   document.getElementById('rwiz-panel-' + rwizCurrentStep).style.display = '';
   switch (rwizCurrentStep) {
     case 1: renderWizardPanel1(); break;
     case 2: renderWizardPanel2(); break;
-    case 3: renderWizardPanel3(); break;
-    case 4: renderWizardPanel4_dest(); break;
-    case 5: renderWizardPanel5_delete(); break;
-    case 6: renderWizardPanel6_finish(); break;
+    case 3: renderWizardPanel3_dest(); break;
+    case 4: renderWizardPanel4_delete(); break;
+    case 5: renderWizardPanel5_finish(); break;
   }
   wizardUpdateNextButton();
 }
@@ -1166,11 +1164,8 @@ function wizardUpdateNextButton() {
     btn.disabled = !rwizState?.promoted;
   } else if (rwizCurrentStep === 2) {
     btn.textContent = 'Continue →';
-    btn.disabled = !(rwizState?.hasScheduleOnSource && rwizState?.hasSnapshotOnSource);
-  } else if (rwizCurrentStep === 3) {
-    btn.textContent = 'Continue →';
     btn.disabled = !(rwizState?.schedulesToDisable?.length === 0);
-  } else if (rwizCurrentStep === 4) {
+  } else if (rwizCurrentStep === 3) {
     btn.textContent = 'Continue →';
     const choice = (window.wizardSnapChoice || 'A');
     const w = rwizState || {};
@@ -1179,17 +1174,17 @@ function wizardUpdateNextButton() {
     } else {
       btn.disabled = !window.wizardBootstrapCreated;
     }
-  } else if (rwizCurrentStep === 5) {
+  } else if (rwizCurrentStep === 4) {
     btn.textContent = 'Continue →';
     btn.disabled = !rwizState?.oldAmrDeleted;
-  } else if (rwizCurrentStep === 6) {
+  } else if (rwizCurrentStep === 5) {
     btn.textContent = 'Finish';
     btn.disabled = false;
   }
 }
 
 function wizardNext() {
-  if (rwizCurrentStep < 6) {
+  if (rwizCurrentStep < 5) {
     rwizCurrentStep += 1;
     renderWizardPanel();
   } else {
@@ -1202,7 +1197,7 @@ function renderWizardPanel1() {
   const p = document.getElementById('rwiz-panel-1');
   const promoted = rwizState?.promoted;
   p.innerHTML = `
-    <h4 style="margin-top:0;">Step 1 / 6 — Verify AMR state</h4>
+    <h4 style="margin-top:0;">Step 1 / 5 — Verify AMR state</h4>
     <p>The current AMR <b>${escapeHtml(rwizAMR.name)}</b> in <code>${escapeHtml(rwizAMR.namespace)}</code> must be in <b>Promoted</b> state.</p>
     <p>State: ${promoted ? '<span class="badge success">PROMOTED</span> ✓' : '<span class="badge error">NOT PROMOTED</span> ✗'}</p>
     ${promoted ? '' : `
@@ -1229,37 +1224,24 @@ async function wizardFailover() {
 function renderWizardPanel2() {
   const p = document.getElementById('rwiz-panel-2');
   const w = rwizState || {};
-  p.innerHTML = `
-    <h4 style="margin-top:0;">Step 2 / 6 — Source cluster prerequisite</h4>
-    <p>On the source cluster <code>${escapeHtml(w.sourceClusterProfile || '')}</code>:
-    <ul>
-      <li>Snapshot or Backup exists for the source app: ${w.hasSnapshotOnSource ? '<span class="badge success">YES</span> ✓' : '<span class="badge error">NO</span> ✗'}</li>
-      <li>Schedule protecting the source app exists: ${w.hasScheduleOnSource ? '<span class="badge success">YES</span> ✓' : '<span class="badge error">NO</span> ✗'}</li>
-    </ul>
-    ${(w.hasScheduleOnSource && w.hasSnapshotOnSource) ? '' : `
-      <div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:4px;margin-top:10px;">
-        Missing pre-req. Go to the Schedules or Snapshots page and create them. Then come back and click "Re-check".
-      </div>
-    `}
-  `;
-}
-
-function renderWizardPanel3() {
-  const p = document.getElementById('rwiz-panel-3');
-  const w = rwizState || {};
   const list = w.schedulesToDisable || [];
   const all = w.schedulesOnSource || [];
   p.innerHTML = `
-    <h4 style="margin-top:0;">Step 3 / 6 — Disable schedules on source cluster</h4>
+    <h4 style="margin-top:0;">Step 2 / 5 — Disable schedules on source cluster</h4>
+    <p>On the reverse-source cluster <code>${escapeHtml(w.sourceClusterProfile || '')}</code> / ns <code>${escapeHtml(w.sourceNamespace || '')}</code>, this app currently has <b>${all.length}</b> schedule(s) registered. The reverse sync must not race with an active schedule on the source side — any enabled schedule must be disabled first.</p>
+
     ${list.length === 0
-      ? '<p>✓ All schedules are disabled.</p>'
-      : `<p>${list.length} schedule(s) still enabled. Click "Disable All" to disable them at once.</p>
-         <table style="width:100%;border-collapse:collapse;font-size:13px;">
-           <thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Name</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Namespace</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Enabled</th></tr></thead>
+      ? `<div style="background:#d1e7dd;border:1px solid #198754;padding:10px;border-radius:6px;margin-top:10px;color:#0f5132;">
+           ✓ No schedules to disable — safe to proceed.
+         </div>`
+      : `<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:6px;margin-top:10px;">
+           <b>${list.length}</b> schedule(s) still <span class="badge pending">enabled</span>. Click "Disable All" to disable them at once.
+         </div>
+         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+           <thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Name</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Namespace</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">State</th></tr></thead>
            <tbody>${list.map(s => `<tr><td style="padding:6px;">${escapeHtml(s.name)}</td><td style="padding:6px;">${escapeHtml(s.namespace)}</td><td style="padding:6px;"><span class="badge pending">enabled</span></td></tr>`).join('')}</tbody>
          </table>
          <button class="btn warning" onclick="wizardDisableAll()" style="margin-top:10px;">Disable All (${list.length})</button>`}
-    ${all.length === 0 ? '<p style="color:#888;">(No schedules found on source cluster.)</p>' : ''}
   `;
 }
 
@@ -1275,8 +1257,8 @@ async function wizardDisableAll() {
   setTimeout(refreshWizardState, 1500);
 }
 
-function renderWizardPanel4_dest() {
-  const p = document.getElementById('rwiz-panel-4');
+function renderWizardPanel3_dest() {
+  const p = document.getElementById('rwiz-panel-3');
   const w = rwizState || {};
   const choice = (window.wizardSnapChoice || 'A');
   const hasSched = !!w.hasScheduleOnDestination;
@@ -1300,15 +1282,15 @@ function renderWizardPanel4_dest() {
         </tr>`;
       }).join('');
 
-  const missSched = hasSched ? '' : '<li class="text-muted">❗ No schedule found on destination cluster (required)</li>';
-  const missSnap = hasSnap ? '' : '<li class="text-muted">❗ No snapshot found (will be required to bootstrap reverse)</li>';
+  const missSched = hasSched ? '' : '<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:4px;margin:8px 0 0 0;color:#856404;"><b>⚠ No schedule protecting the destination app</b> — recommended to create one for ongoing backups, but you can continue without it.</div>';
+  const missSnap = hasSnap ? '' : '<div style="background:#f8d7da;border:1px solid #dc3545;padding:10px;border-radius:4px;margin:8px 0 0 0;color:#721c24;"><b>❌ No snapshot baseline found on destination cluster</b> — you MUST create one (Choice B) before continuing.</div>';
 
   p.innerHTML = `
-    <h4 style="margin-top:0;">Step 4 / 6 — Destination baseline + snapshot choice</h4>
-    <p>This step verifies the promoted-side (destination cluster = <code>${escapeHtml(w.destinationClusterProfile || '')}</code>) has a snapshot+schedule to bootstrap reverse replication, then lets you choose which snapshot to use.</p>
+    <h4 style="margin-top:0;">Step 3 / 5 — Destination baseline + snapshot choice</h4>
+    <p>This step verifies the promoted cluster (<code>${escapeHtml(rwizAMR.clusterProfile || '')}</code>) has a <b>snapshot baseline</b> to bootstrap reverse replication. A schedule protecting the destination app is recommended but not required — you may continue without it.</p>
 
     <div style="background:#f8f9fa;border:1px solid #ddd;border-radius:6px;padding:10px 14px;margin:10px 0;">
-      <b>Schedules on destination cluster <code>${escapeHtml(w.destinationClusterProfile || '')}</code> / ns <code>${escapeHtml(w.sourceNamespace || '')}</code>:</b>
+      <b>Schedules on destination cluster <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> / ns <code>${escapeHtml(w.destinationNamespace || '')}</code>:</b>
       <ul style="margin:6px 0 0 16px;font-size:13px;">${schedulesList}</ul>
       ${missSched}
     </div>
@@ -1335,7 +1317,7 @@ function renderWizardPanel4_dest() {
         ${created ? `<span style="color:#198754;">— created <code>${escapeHtml(window.wizardBootstrapName || '')}</code></span>` : '<span style="color:#666;">— click "Create Snapshot" button below'}</span>
       </label>
       <div id="rwiz-create-snap-area" style="display:${choice === 'B' ? 'block' : 'none'};margin-top:8px;padding:10px;background:#fefefe;border:1px dashed #ccc;border-radius:4px;">
-        <label style="display:block;font-size:12px;color:#666;">Snapshot name (on destination cluster ns <code>${escapeHtml(w.sourceNamespace || '')}</code>):</label>
+        <label style="display:block;font-size:12px;color:#666;">Snapshot name (on destination cluster ns <code>${escapeHtml(w.destinationNamespace || '')}</code>):</label>
         <input type="text" id="rwiz-snap-name" value="${escapeHtml(defaultName)}" style="width:100%;padding:6px;font-family:var(--font-mono);font-size:12px;">
         <button class="btn warning" onclick="wizardCreateBootstrapSnapshot()" style="margin-top:8px;">Create Snapshot Now</button>
       </div>
@@ -1344,7 +1326,7 @@ function renderWizardPanel4_dest() {
 
   if (!hasSnap && choice === 'A') {
     window.wizardSnapChoice = 'B';
-    renderWizardPanel4_dest();
+    renderWizardPanel3_dest();
     return;
   }
 }
@@ -1353,7 +1335,7 @@ function wizardSnapChoiceChanged(value) {
   window.wizardSnapChoice = value;
   window.wizardBootstrapCreated = false;
   window.wizardBootstrapName = '';
-  renderWizardPanel4_dest();
+  renderWizardPanel3_dest();
 }
 
 async function wizardCreateBootstrapSnapshot() {
@@ -1384,19 +1366,19 @@ async function wizardCreateBootstrapSnapshot() {
       window.wizardBootstrapName = r.snapshot_name || snapName;
       window.wizardSnapDefaultName = window.wizardBootstrapName;
       await refreshWizardState();
-      renderWizardPanel4_dest();
+      renderWizardPanel3_dest();
     } else {
       toast('Create snapshot failed: ' + r.message, 'error');
     }
   } catch (e) { toast('Request failed: ' + e.message, 'error'); }
 }
 
-function renderWizardPanel5_delete() {
-  const p = document.getElementById('rwiz-panel-5');
+function renderWizardPanel4_delete() {
+  const p = document.getElementById('rwiz-panel-4');
   const w = rwizState || {};
   const deletedAt = w._deletedAt ? new Date(w._deletedAt).toLocaleTimeString() : '';
   p.innerHTML = `
-    <h4 style="margin-top:0;">Step 5 / 6 — Delete the old AMR</h4>
+    <h4 style="margin-top:0;">Step 4 / 5 — Delete the old AMR</h4>
     ${w.oldAmrDeleted
       ? `<p>✓ Old AMR has been deleted ${deletedAt ? '(' + escapeHtml(deletedAt) + ')' : ''}.</p>
          ${w.amrFetchError ? '<p style="color:#888;font-size:12px;">Note: ' + escapeHtml(w.amrFetchError.split('\\n')[0]) + '</p>' : ''}`
@@ -1433,21 +1415,21 @@ async function wizardDeleteOldAmr() {
   } catch (e) { toast('Delete request failed: ' + e.message, 'error'); }
 }
 
-function renderWizardPanel6_finish() {
-  const p = document.getElementById('rwiz-panel-6');
+function renderWizardPanel5_finish() {
+  const p = document.getElementById('rwiz-panel-5');
   const w = rwizState || {};
-  const activeMatch = w.destinationActiveProfileMatches;
+  const activeMatch = rwizAMR.clusterProfile === w.activeProfile;
   p.innerHTML = `
-    <h4 style="margin-top:0;">Step 6 / 6 — Wizard complete</h4>
+    <h4 style="margin-top:0;">Step 5 / 5 — Wizard complete</h4>
     <p>✓ All prerequisites met. The 5-step gate is complete.</p>
     <p>Close the wizard and click the <b>Create AMR</b> button at the top of this page to set up the new (reversed) AMR. Fill the form with:</p>
     <ul style="font-size:13px;line-height:1.7;">
       <li><b>Name:</b> <code>${escapeHtml(w.amrName)}</code></li>
-      <li><b>Source Cluster:</b> <code>${escapeHtml(w.destinationClusterProfile || '')}</code> (the OTHER profile, not active)</li>
+      <li><b>Source Cluster:</b> <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> (the ACTIVE profile, where promoted data lives)</li>
       <li><b>Source Namespace:</b> <code>${escapeHtml(w.sourceNamespace || '')}</code> (original destination ns)</li>
       <li><b>Source App:</b> <code>${escapeHtml(w.sourceAppName || '')}</code> (UID ${escapeHtml((w.sourceAppUID || '').slice(0,8))}…)</li>
       <li><b>Source AppVault:</b> <code>${escapeHtml(w.sourceAppVault || '')}</code></li>
-      <li><b>Destination Cluster:</b> <code>${escapeHtml(w.sourceClusterProfile || '')}</code> (the active profile)</li>
+      <li><b>Destination Cluster:</b> <code>${escapeHtml(w.sourceClusterProfile || '')}</code> (the OTHER profile, where new AMR destination will be)</li>
       <li><b>Destination Namespace:</b> dropdown — default <code>${escapeHtml(w.destinationNamespace || '')}</code></li>
       <li><b>Destination AppVault:</b> <code>${escapeHtml(w.destinationAppVault || '')}</code></li>
       <li><b>Storage Class:</b> <code>${escapeHtml(w.defaultStorageClassOnDestination || '')}</code> (default of new destination)</li>
@@ -1456,8 +1438,8 @@ function renderWizardPanel6_finish() {
     ${activeMatch
       ? ''
       : `<div style="background:#f8d7da;border:1px solid #dc3545;padding:10px;border-radius:4px;margin-top:10px;color:#721c24;">
-           <b>Active profile is <code>${escapeHtml(w.activeProfile)}</code></b> — but the new AMR must be applied on <code>${escapeHtml(w.destinationClusterProfile)}</code>.
-           Go to <b>Settings</b> and switch the active profile to <code>${escapeHtml(w.destinationClusterProfile || '')}</code> before applying the Create form.
+           <b>Active profile is <code>${escapeHtml(w.activeProfile)}</code></b> — but the new AMR must be applied on <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code>.
+           Go to <b>Settings</b> and switch the active profile to <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> before applying the Create form.
          </div>`}
     <p style="margin-top:14px;color:#666;font-size:12px;">Press <b>Finish</b> to close this wizard.</p>
   `;

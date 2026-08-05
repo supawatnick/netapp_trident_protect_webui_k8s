@@ -739,6 +739,9 @@ def register_routes(app: Flask) -> None:
             "refresh": cfg.refresh,
             "whoami": whoami,
             "platform": trident_protect.detect_platform(),
+            "maxProfiles": 2,
+            "profileCount": len(cfg.profiles),
+            "canAddProfile": len(cfg.profiles) < 2,
         })
 
     @app.route("/api/cluster-info")
@@ -1087,6 +1090,13 @@ def register_routes(app: Flask) -> None:
         profile_name = profile_name.replace("/", "-").replace(" ", "-")
 
         cfg = Config.instance()
+        # Enforce max 2 profiles (for DR source + destination), allow updates of
+        # existing profile (e.g. re-importing the same kubeconfig).
+        if profile_name not in cfg.profiles and len(cfg.profiles) >= 2:
+            return jsonify({
+                "ok": False,
+                "message": "Maximum 2 cluster profiles allowed (DR requires source + destination). Delete an existing profile first.",
+            }), 400
         if profile_name in cfg.profiles:
             profile_name = f"{profile_name}-imported"
         cfg.profiles[profile_name] = {

@@ -1946,11 +1946,34 @@ def list_app_schedules(namespace: str, app_name: str, context: str | None = None
     ]
 
 
-def get_reverse_wizard_state(namespace: str, name: str, context: str | None = None,
-                              source_cluster: str = "") -> dict:
-    """Gather state for the Reverse (YAML) wizard (read-only)."""
+def get_reverse_wizard_state(
+    namespace: str,
+    name: str,
+    context: str | None = None,
+    source_cluster: str = "",
+) -> dict:
+    """Gather state for the Reverse (YAML) wizard (read-only, no oc writes).
+
+    Returns a dict with wizard-step check values:
+      promoted: bool (AMR state on destination)
+      recurrenceRule, sourceAppName, sourceNamespace, destinationNamespace,
+      sourceAppVault, destinationAppVault: from current AMR spec
+      sourceAppUID: uid of the app CR on the current destination cluster
+        (becomes the new source app after reverse)
+      schedulesOnSource: list of schedules linked to source app on OTHER cluster
+      schedulesToDisable: same list filtered to ones still enabled
+      hasScheduleOnSource: bool (≥1 schedule)
+      hasSnapshotOnSource: bool (≥1 snapshot/backup)
+      oldAmrDeleted: bool
+      storageClassesOnDestination, defaultStorageClassOnDestination: SCs of OTHER cluster
+      sourceClusterProfile, destinationClusterProfile: profile names
+      activeProfile: dashboard's active profile
+      destinationActiveProfileMatches: bool (Destination Cluster = active,
+        required for create-AMR form which applies to active cluster)
+    """
     from .config import Config
     cfg = Config.instance()
+
     state = {
         "amrName": name,
         "amrNamespace": namespace,
@@ -1970,78 +1993,169 @@ def get_reverse_wizard_state(namespace: str, name: str, context: str | None = No
         "destinationNamespace": "",
         "sourceAppVault": "",
         "destinationAppVault": "",
-        "hasSnapshotOnDestination": False,
-        "schedulesOnDestination": [],
-        "defaultStorageClassOnDestination": "",
         "storageClassesOnDestination": [],
+        "defaultStorageClassOnDestination": "",
         "destinationActiveProfileMatches": False,
-        "allSchedules": [],
+        "amrFetchError": "",
     }
-    amr = get_amr(namespace, name, context=context, cluster=cfg.active_cluster)
-    if not amr:
-        return state
-    sp = amr.get("spec", {}) or {}
-    st = amr.get("status", {}) or {}
-    state["recurrenceRule"] = sp.get("recurrenceRule", "")
-    state["sourceAppName"] = sp.get("sourceApplicationName", "")
-    state["sourceAppVault"] = sp.get("sourceAppVaultRef", "")
-    state["destinationAppVault"] = sp.get("destinationAppVaultRef", "")
-    ns_mapping = sp.get("namespaceMapping", []) or []
-    if ns_mapping:
-        state["sourceNamespace"] = ns_mapping[0].get("source", "")
-        state["destinationNamespace"] = ns_mapping[0].get("destination", "")
-    state["promoted"] = (st.get("state", "").lower() == "promoted")
 
-    # Schedules on source cluster
-    src_ns = state["sourceNamespace"]
-    if src_ns and state["sourceAppName"]:
-        try:
-            src_scheds = list_app_schedules(src_ns, state["sourceAppName"], context=None)
-            state["schedulesOnSource"] = src_scheds
-            state["hasScheduleOnSource"] = bool(src_scheds)
-            state["schedulesToDisable"] = [s for s in src_scheds if s.get("enabled")]
-        except Exception as e:
-            log.warning(f"Reverse wizard: list_app_schedules on source failed: {e}")
+    other_ctx = None
+    if source_cluster and source_cluster in cfg.profiles:
+        other_ctx = (
+            cfg.profiles[source_cluster].get("kubecontext")
+            or cfg.profiles[source_cluster].get("kubeconfig_context")
+        )
 
-    # Snapshots/backups on source
-    if src_ns:
-        try:
-            snaps = list_snapshots(namespace=src_ns, context=None)
-            backups = list_backups(namespace=src_ns, context=None)
-            state["hasSnapshotOnSource"] = bool(snaps or backups)
-        except Exception as e:
-            log.warning(f"Reverse wizard: snapshots/backups check failed: {e}")
-
-    # Schedules on destination
-    dest_ns = state["destinationNamespace"]
-    if dest_ns:
-        try:
-            dest_scheds = list_schedules(context=context)
-            dest_app_scheds = [s for s in dest_scheds if s.get("namespace") == dest_ns]
-            state["schedulesOnDestination"] = dest_app_scheds
-            state["allSchedules"] = dest_scheds
-        except Exception as e:
-            log.warning(f"Reverse wizard: list_schedules on destination failed: {e}")
-        try:
-            dest_snaps = list_snapshots(namespace=dest_ns, context=context)
-            state["hasSnapshotOnDestination"] = bool(dest_snaps)
-        except Exception as e:
-            log.warning(f"Reverse wizard: destination snapshots check failed: {e}")
-        try:
-            scs = list_storage_classes(context=context)
-            state["storageClassesOnDestination"] = [s["name"] for s in scs]
-            for s in scs:
-                if s.get("isDefault"):
-                    state["defaultStorageClassOnDestination"] = s["name"]
-                    break
-        except Exception as e:
-            log.warning(f"Reverse wizard: storage classes on destination failed: {e}")
-
-    # oldAmrDeleted — not auto-detectable, require user check
-    state["oldAmrDeleted"] = False
-    state["destinationActiveProfileMatches"] = (
-        state["activeProfile"] == state["destinationClusterProfile"]
+    rc, out, err = oc_run(
+        ["get", "appmirrorrelationship", name, "-n", namespace, "-o", "json"],
+        context=context,
     )
+    src_ns = ""
+    dst_ns = ""
+    src_app = ""
+    if rc != 0:
+        state["amrFetchError"] = (err or out).strip()
+        state["oldAmrDeleted"] = True
+        state["promoted"] = False
+    else:
+        try:
+            amr = json.loads(out)
+        except json.JSONDecodeError:
+            state["amrFetchError"] = "Failed to parse AMR JSON"
+            state["oldAmrDeleted"] = True
+            state["promoted"] = False
+            amr = None
+
+        if amr is not None:
+            spec = amr.get("spec", {})
+            ns_mapping = spec.get("namespaceMapping", [{}])
+            src_ns = ns_mapping[0].get("source", "") if ns_mapping else ""
+            dst_ns = ns_mapping[0].get("destination", "") if ns_mapping else ""
+            src_app = spec.get("sourceApplicationName", "")
+            src_vault = spec.get("sourceAppVaultRef", "")
+            dst_vault = spec.get("destinationAppVaultRef", "")
+            recurrence = spec.get("recurrenceRule", "")
+
+            state["sourceAppName"] = src_app
+            state["sourceNamespace"] = src_ns
+            state["destinationNamespace"] = dst_ns
+            state["sourceAppVault"] = dst_vault
+            state["destinationAppVault"] = src_vault
+            state["recurrenceRule"] = recurrence
+
+            amr_status = amr.get("status", {})
+            amr_state = (amr_status.get("state") or "").lower()
+            state["promoted"] = (amr_state == "promoted")
+
+            state["destinationClusterProfile"] = source_cluster or ""
+
+            if context and dst_ns and src_app:
+                try:
+                    apps = list_applications(context=context)
+                    for a in apps:
+                        if a.get("namespace") == dst_ns and a.get("name") == src_app:
+                            state["sourceAppUID"] = a.get("uid", "")
+                            break
+                except Exception:
+                    pass
+
+            if other_ctx:
+                try:
+                    schedules = list_app_schedules(src_ns, src_app, context=other_ctx)
+                    sched_list = [
+                        {
+                            "name": s.get("name"),
+                            "namespace": s.get("namespace"),
+                            "enabled": s.get("enabled"),
+                        }
+                        for s in schedules
+                    ]
+                    state["schedulesOnSource"] = sched_list
+                    state["schedulesToDisable"] = [
+                        s for s in sched_list if s.get("enabled") is not False
+                    ]
+                    state["hasScheduleOnSource"] = len(sched_list) > 0
+                except Exception:
+                    pass
+
+                try:
+                    snaps = _list("snapshot", namespace=src_ns, context=other_ctx)
+                    backups = _list("backup", namespace=src_ns, context=other_ctx)
+                    state["hasSnapshotOnSource"] = (len(snaps) > 0 or len(backups) > 0)
+                except Exception:
+                    pass
+
+                try:
+                    sc_list = list_storage_classes(context=other_ctx)
+                    state["storageClassesOnDestination"] = sc_list
+                    for sc in sc_list:
+                        if sc.get("isDefault"):
+                            state["defaultStorageClassOnDestination"] = sc.get("name")
+                            break
+                except Exception:
+                    pass
+
+    if context and dst_ns and src_app:
+        try:
+            dest_schedules = list_app_schedules(dst_ns, src_app, context=context)
+            dest_sched_list = [
+                {
+                    "name": s.get("name"),
+                    "namespace": s.get("namespace"),
+                    "enabled": s.get("enabled"),
+                }
+                for s in dest_schedules
+            ]
+            state["schedulesOnDestination"] = dest_sched_list
+            state["hasScheduleOnDestination"] = len(dest_sched_list) > 0
+        except Exception:
+            pass
+
+        try:
+            dest_snaps = _list("snapshot", namespace=dst_ns, context=context)
+            dest_snaps_sorted = sorted(
+                dest_snaps,
+                key=lambda s: s.get("metadata", {}).get("creationTimestamp", "") or "",
+                reverse=True,
+            )[:5]
+            snap_list = []
+            latest_name = ""
+            latest_ts = ""
+            for s in dest_snaps_sorted:
+                md = s.get("metadata", {})
+                st = s.get("status", {})
+                ts = md.get("creationTimestamp", "") or ""
+                sn_name = md.get("name", "")
+                snap_list.append({
+                    "name": sn_name,
+                    "creationTimestamp": ts,
+                    "state": st.get("state", ""),
+                    "appLabel": md.get("labels", {}).get("appLabel", ""),
+                    "age": ts.replace("T", " ").replace("Z", "") if ts else "",
+                })
+                if (not latest_name) and st.get("state", "").lower() in ("completed", "success", "available"):
+                    latest_name = sn_name
+                    latest_ts = ts
+            state["latestSnapshotsOnDestination"] = snap_list
+            state["hasSnapshotOnDestination"] = len(snap_list) > 0
+            state["latestSnapshotName"] = latest_name
+        except Exception:
+            pass
+
+    if context:
+        rc_amr, _, _ = oc_run(
+            ["get", "appmirrorrelationship", name, "-n", namespace, "-o", "name"],
+            context=context,
+        )
+        if rc_amr != 0:
+            state["oldAmrDeleted"] = True
+        elif not state.get("amrFetchError"):
+            state["oldAmrDeleted"] = False
+
+    state["destinationActiveProfileMatches"] = (
+        bool(source_cluster) and source_cluster == cfg.active_cluster
+    )
+
     return state
 
 

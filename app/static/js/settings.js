@@ -12,6 +12,24 @@ async function loadSettings() {
     const data = await res.json();
     currentProfiles = data.profiles || {};
     currentActive = data.active || '';
+    const maxProfiles = data.maxProfiles || 2;
+    const profileCount = data.profileCount || Object.keys(currentProfiles).length;
+    const canAdd = data.canAddProfile !== undefined ? data.canAddProfile : (profileCount < maxProfiles);
+
+    // Update "+ Add Profile" button state
+    const addBtn = document.querySelector('button[onclick="showAddForm()"]');
+    if (addBtn) {
+      addBtn.disabled = !canAdd || !tpRequireAdmin();
+      addBtn.title = !tpRequireAdmin() ? 'Admin role required' :
+        (canAdd ? '' : `Maximum ${maxProfiles} cluster profiles allowed (DR source + destination). Delete an existing profile first.`);
+    }
+
+    // Show/hide profile-limit banner
+    const banner = document.getElementById('profile-limit-banner');
+    if (banner) {
+      banner.style.display = (profileCount >= maxProfiles) ? 'block' : 'none';
+      banner.innerHTML = `<b>${profileCount}/${maxProfiles} cluster profiles configured.</b> DR requires exactly source + destination clusters. Delete an existing profile to add a new one.`;
+    }
 
     document.getElementById('whoami-user').textContent = data.whoami?.user || '—';
     document.getElementById('whoami-server').textContent = data.whoami?.server || '—';
@@ -126,6 +144,10 @@ async function showFullToken() {
 
 function showAddForm() {
   if (!tpRequireAdmin()) return;
+  if (Object.keys(currentProfiles).length >= 2) {
+    toast('Maximum 2 cluster profiles allowed (DR source + destination). Delete an existing profile first.', 'error');
+    return;
+  }
   editingProfile = null;
   document.getElementById('profile-form-title').textContent = 'Add Profile';
   document.getElementById('pf-name').value = '';
@@ -133,7 +155,6 @@ function showAddForm() {
   document.getElementById('pf-description').value = '';
   document.getElementById('pf-api-url').value = 'https://';
   document.getElementById('pf-insecure').value = 'true';
-  document.getElementById('pf-appvault').value = 'ontap-s3-appvault';
   document.getElementById('profile-form').style.display = 'block';
 }
 
@@ -148,7 +169,6 @@ function editProfile(name) {
   document.getElementById('pf-description').value = p.description || '';
   document.getElementById('pf-api-url').value = p.api_url || '';
   document.getElementById('pf-insecure').value = p.insecure_skip_tls ? 'true' : 'false';
-  document.getElementById('pf-appvault').value = p.appvault || 'ontap-s3-appvault';
   document.getElementById('profile-form').style.display = 'block';
 }
 
@@ -164,7 +184,6 @@ async function saveProfile() {
     description: document.getElementById('pf-description').value.trim(),
     api_url: document.getElementById('pf-api-url').value.trim(),
     insecure_skip_tls: document.getElementById('pf-insecure').value === 'true',
-    appvault: document.getElementById('pf-appvault').value.trim() || 'ontap-s3-appvault',
   };
   if (!body.name || !body.api_url) {
     toast('Name and API URL are required', 'error');
