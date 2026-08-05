@@ -1,3 +1,53 @@
+## [v1.4.18] — 2026-08-05
+
+### Fixed — Disaster Recovery (DR) flow could not create AppMirrorRelationships
+
+The DR → Create AppMirrorRelationship form on the Kubernetes edition
+failed every submit with `spec.sourceApplicationUID required`, and the
+form's namespace / storageclass dropdowns were always empty or showed
+garbage values. The DR table also reported degraded AMRs even after a
+successful failover. All four root causes were in the k8s fork and are
+now aligned with the OpenShift edition's behavior.
+
+- **`serialize_application()`** now returns the Application CR's
+  `metadata.uid`. Previously the UID was stripped, so the frontend
+  `sourceAppInfo.uid` was always empty and the AMR YAML contained
+  `sourceApplicationUID: ""`. The CRD requires this field, so
+  `kubectl apply` rejected every YAML the form built.
+- **`list_namespaces_for_context()`** now shells out to the platform
+  CLI (`kubectl` on k8s) via `oc_run()` with `--context`, instead of
+  the previous `_list("namespace", ...)` call which routed through
+  `tridentprotect-ctl` — the CLI has no `namespace` subcommand and
+  silently returned an empty list, leaving the form with no Source
+  Namespace options.
+- **`list_storage_classes()`** now uses the same `oc_run()` approach
+  for the `storageclass` resource. Previously the call also returned
+  empty, and even when data flowed the response shape was
+  `[{name, isDefault}, ...]` which the frontend rendered as
+  `[object Object]` in the Storage Class dropdown.
+- **`/api/dr/storageclasses`** now delegates to `get_storageclasses()`
+  (returns plain name strings) instead of `list_storage_classes()`
+  (returns dict objects). Matches the OpenShift edition and the
+  frontend's `${sc}` rendering expectation.
+- **`_run()`** now places the optional `--context` flag **after** the
+  subcommand (`<ctl> get ... --context <ctx>`), matching the
+  `tridentprotect-ctl` Go binary's actual flag binding. The previous
+  ordering (`<ctl> --context <ctx> get ...`) failed with "flag
+  provided but not defined: -context", which silently broke every
+  per-context discovery call (including the schedule enable/disable
+  endpoints that walk every configured profile).
+
+### Verified end-to-end on live 107
+
+- Source cluster `k8s-clus1`, destination cluster `k8s-clus2`
+- Both clusters now expose StorageClass list:
+  clus1 = `a400-iscsi-01 / a400-nfs-01 / longhorn`
+  clus2 = `a400-nfs-02`
+- Created AMR `amr-app-app1` (clus2/clus2-app1) via the form API,
+  established to Promoted, then walked the 5-step Reverse Resync
+  wizard through to a deleted old AMR + bootstrap snapshot on clus2
+  + schedule disabled on clus1. All gates passed.
+
 ## [v1.4.17] — 2026-08-05
 
 ### Added — Source Application dropdown in AMR create form

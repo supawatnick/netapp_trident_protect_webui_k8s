@@ -87,12 +87,18 @@ def _cli_path() -> str:
 
 
 def _run(args, timeout=TIMEOUT_SEC, context: str | None = None) -> tuple[int, str, str]:
-    """Run tridentprotect-ctl and return (rc, stdout, stderr)."""
-    cmd = [get_cli_path()]
+    """Run tridentprotect-ctl and return (rc, stdout, stderr).
+
+    If context is provided, pass --context after the subcommand (get/create/delete).
+    The tridentprotect-ctl Go binary accepts -context as a subcommand flag only;
+    placing it before the subcommand fails with "flag provided but not defined: -context".
+    """
+    cmd = [get_cli_path()] + args[:1]
     if context:
         cmd += ["--context", context]
+    cmd += args[1:]
     proc = subprocess.run(
-        cmd + args,
+        cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -192,6 +198,7 @@ def serialize_application(app: dict) -> dict:
         "namespace": md.get("namespace"),
         "created": _fmt_time(md.get("creationTimestamp")),
         "age": _age(md.get("creationTimestamp")),
+        "uid": md.get("uid", ""),
         "protectionState": st.get("protectionState", "Unknown"),
         "protectionHealthState": st.get("protectionHealthState", "Unknown"),
         "details": st.get("protectionStateDetails", []),
@@ -1637,37 +1644,62 @@ def list_namespaces_for_context(context: str | None = None) -> list[dict]:
     """Return list of {name, ...} dicts for namespaces on the given context.
 
     Used by DR endpoints where we need cluster-aware namespace discovery.
+
+    tridentprotect-ctl does not support core v1 namespaces, so we shell
+    out to the platform CLI (kubectl on k8s, oc on OCP) via oc_run.
     """
-    items = _list("namespace", context=context)
-    out = []
-    for ns in items:
+    rc, out, err = oc_run(["get", "ns", "-o", "json"], context=context)
+    if rc != 0:
+        log.error(f"list_namespaces_for_context ({context}) failed: rc={rc} err={err.strip()}")
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        log.error(f"list_namespaces_for_context: JSON decode failed: {e}")
+        return []
+
+    items = []
+    for ns in data.get("items", []):
         md = ns.get("metadata", {})
         st = ns.get("status", {})
-        out.append({
+        items.append({
             "name": md.get("name", ""),
             "status": st.get("phase", "Unknown"),
             "created": _fmt_time(md.get("creationTimestamp")),
         })
     # Hide system namespaces (mirror OCP DR behaviour: skip kube-* and openshift-*)
-    out = [n for n in out
-           if not n["name"].startswith("kube-")
-           and not n["name"].startswith("openshift-")]
-    return out
+    items = [n for n in items
+             if not n["name"].startswith("kube-")
+             and not n["name"].startswith("openshift-")]
+    return items
 
 
 def list_storage_classes(context: str | None = None) -> list[dict]:
-    """List storage classes (name + isDefault) on a given context."""
-    items = _list("storageclass", context=context)
-    out = []
-    for sc in items:
+    """List storage classes (name + isDefault) on a given context.
+
+    tridentprotect-ctl does not support storageclass, so we shell out to
+    the platform CLI via oc_run (kubectl on k8s, oc on OCP).
+    """
+    rc, out, err = oc_run(["get", "storageclass", "-o", "json"], context=context)
+    if rc != 0:
+        log.error(f"list_storage_classes ({context}) failed: rc={rc} err={err.strip()}")
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        log.error(f"list_storage_classes: JSON decode failed: {e}")
+        return []
+
+    result = []
+    for sc in data.get("items", []):
         name = sc.get("metadata", {}).get("name", "")
         ann = (sc.get("metadata", {}).get("annotations") or {})
         is_default = (
             ann.get("storageclass.kubernetes.io/is-default-class") == "true"
             or ann.get("storageclass.beta.kubernetes.io/is-default-class") == "true"
         )
-        out.append({"name": name, "isDefault": is_default})
-    return out
+        result.append({"name": name, "isDefault": is_default})
+    return result
 
 
 def _derive_cluster_from_namespace(namespace: str) -> str:

@@ -1351,7 +1351,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/dr/storageclasses")
     def api_dr_storageclasses():
         ctx = request.args.get("context") or None
-        items = trident_protect.list_storage_classes(context=ctx)
+        items = trident_protect.get_storageclasses(context=ctx)
         return jsonify({"items": items, "total": len(items)})
 
     @app.route("/api/dr/namespaces")
