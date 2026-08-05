@@ -274,30 +274,12 @@ async function toggleSchedule(namespace, name, enable) {
   const action = enable ? 'enable' : 'disable';
   const verb = enable ? 'Enable' : 'Disable';
   if (!confirm(`${verb} schedule "${name}" in namespace "${namespace}"?`)) return;
-  // Fetch profiles to resolve cluster context (matches _resolve_schedule_context in main.py)
-  let context = '';
-  try {
-    const settingsRes = await tpFetch('/api/settings');
-    const settings = await settingsRes.json();
-    const profiles = settings.profiles || {};
-    const active = settings.active || '';
-    // Prefer the active profile's kubeconfig_context (works for any cluster).
-    if (active) {
-      context = (profiles[active] || {}).kubeconfig_context
-              || (profiles[active] || {}).kubecontext
-              || '';
-    }
-  } catch (e) {
-    toast(`Failed to fetch cluster profiles: ${e.message}`, 'error');
-    return;
-  }
-  if (!context) {
-    toast(`Cannot resolve cluster context for namespace ${namespace} (no active profile or no kubeconfig_context)`, 'error');
-    return;
-  }
+  // Backend discovers the cluster that owns the Schedule CR (no client-side
+  // cluster-profile assumption). Operator may pin a specific cluster by
+  // appending ?context=<kubecontext> via the API directly if needed.
   try {
     const res = await tpFetch(
-      `/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${action}?context=${encodeURIComponent(context)}`,
+      `/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${action}`,
       { method: 'POST' }
     );
     const r = await res.json();

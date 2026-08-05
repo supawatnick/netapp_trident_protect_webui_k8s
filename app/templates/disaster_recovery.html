@@ -95,8 +95,13 @@
         </label>
       </div>
       <div class="form-row">
-        <label><span>Source Namespace <span class="text-muted">(application auto-detected from this namespace)</span></span>
+        <label><span>Source Namespace <span class="text-muted">(select to load applications)</span></span>
           <select id="amr-source-ns"><option value="">Loading...</option></select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Source Application <span class="text-muted">(Application CR to mirror — choose from this namespace)</span></span>
+          <select id="amr-source-app"><option value="">—</option></select>
         </label>
         <div id="amr-source-app-info" class="text-muted" style="font-size:12px;"></div>
       </div>
@@ -602,21 +607,52 @@ async function loadSourceClusterData() {
 }
 
 document.getElementById('amr-source-ns').addEventListener('change', updateSourceAppInfo);
+document.getElementById('amr-source-app').addEventListener('change', onSourceAppChange);
 
 let sourceAppInfo = {name: '', uid: ''};
 
 async function updateSourceAppInfo() {
-  // Source Application name/UID are auto-derived from the selected source namespace
+  // Populate the Source Application dropdown from the selected source namespace.
+  // Auto-selects the first app when there is exactly one (preserves the previous
+  // single-app auto-detect behavior). When multiple apps exist, leaves the user
+  // to choose but defaults to the first so the form is immediately submit-able.
   const cluster = getSourceProfile();
   const ns = document.getElementById('amr-source-ns').value;
+  const appSelect = document.getElementById('amr-source-app');
   if (!cluster || !ns) {
+    appSelect.innerHTML = '<option value="">—</option>';
+    appSelect.value = '';
     sourceAppInfo = {name: '', uid: ''};
     setSourceAppInfoText();
     return;
   }
   const apps = await loadAppsForCluster(cluster, ns);
-  const app = apps[0] || {};
-  sourceAppInfo = {name: app.name || '', uid: app.uid || ''};
+  if (!apps.length) {
+    appSelect.innerHTML = '<option value="">No Application CRs in this namespace</option>';
+    appSelect.value = '';
+    sourceAppInfo = {name: '', uid: ''};
+    setSourceAppInfoText();
+    return;
+  }
+  // Build option list; carry uid via data-uid.
+  appSelect.innerHTML = apps.map(a =>
+    `<option value="${esc(a.name)}" data-uid="${esc(a.uid || '')}">${esc(a.name)}</option>`
+  ).join('');
+  // Default-select the first app (preserves prior auto-detect behavior).
+  appSelect.value = apps[0].name || '';
+  sourceAppInfo = {name: apps[0].name || '', uid: apps[0].uid || ''};
+  setSourceAppInfoText();
+}
+
+function onSourceAppChange() {
+  // Pull the selected app's name + uid out of the dropdown.
+  const appSelect = document.getElementById('amr-source-app');
+  const sel = appSelect.options[appSelect.selectedIndex];
+  if (!sel || !sel.value) {
+    sourceAppInfo = {name: '', uid: ''};
+  } else {
+    sourceAppInfo = {name: sel.value, uid: sel.dataset.uid || ''};
+  }
   setSourceAppInfoText();
 }
 
@@ -624,7 +660,7 @@ function setSourceAppInfoText() {
   const el = document.getElementById('amr-source-app-info');
   if (!el) return;
   if (sourceAppInfo.name) {
-    el.textContent = `Application: ${sourceAppInfo.name} (UID ${sourceAppInfo.uid}) — auto-detected`;
+    el.textContent = `Application: ${sourceAppInfo.name} (UID ${sourceAppInfo.uid})`;
   } else {
     el.textContent = 'No Application CR found in this namespace on the source cluster';
   }

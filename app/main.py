@@ -381,33 +381,52 @@ def register_routes(app: Flask) -> None:
         ok, msg = trident_protect.delete_schedule(namespace, name)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
-    def _resolve_schedule_context(namespace: str) -> str:
-        """Resolve kubeconfig context for a schedule based on active profile.
+    def _resolve_schedule_context(namespace: str, name: str) -> str:
+        """Find which configured cluster actually owns the Schedule CR.
 
-        For k8s edition, schedules are queried against the active cluster's
-        context. The caller can override via ?context=<kubecontext>.
+        No cluster-naming convention is assumed — the Schedule CR is looked up
+        on every configured profile's cluster (active first for determinism).
+        Returns the kubecontext of the owning cluster, or "" if not found.
+
+        Callers may override by passing ?context=<kubecontext>.
         """
         cfg = Config.instance()
-        if cfg.active_cluster and cfg.active_cluster in cfg.profiles:
-            ctx = get_kubecontext(cfg.active_cluster)
-            if ctx:
-                return ctx
-        # Fallback: any profile that has a kubecontext
-        for pname, prof in cfg.profiles.items():
+        active = cfg.active_cluster
+        ordered = [active] + [n for n in cfg.profiles if n != active]
+        checked: list[str] = []
+        for pname in ordered:
+            if not pname:
+                continue
             ctx = get_kubecontext(pname)
-            if ctx:
-                return ctx
+            if not ctx:
+                continue
+            try:
+                if trident_protect._get("schedule", name, namespace, context=ctx):
+                    return ctx
+                checked.append(f"{pname}({ctx})")
+            except Exception as e:
+                log.warning(f"_resolve_schedule_context: lookup on {pname} failed: {e}")
+                checked.append(f"{pname}({ctx}, error)")
         return ""
+
+    def _schedule_context_error(namespace: str, name: str, checked: list[str]) -> tuple:
+        cfg = Config.instance()
+        if not checked:
+            checked = [n for n in cfg.profiles if get_kubecontext(n)]
+        msg = (
+            f"Schedule '{namespace}/{name}' not found in any configured cluster"
+            + (f" (checked: {', '.join(checked)})" if checked else
+               " (no profiles with kubecontext configured)")
+            + ". Verify the schedule exists and that profile kubecontexts are set in Settings."
+        )
+        return jsonify({"ok": False, "message": msg}), 400
 
     @app.route("/api/schedules/<namespace>/<name>/enable", methods=["POST"])
     def api_enable_schedule(namespace, name):
-        ctx = request.args.get("context") or _resolve_schedule_context(namespace)
+        override = request.args.get("context") or None
+        ctx = override or _resolve_schedule_context(namespace, name)
         if not ctx:
-            return jsonify({
-                "ok": False,
-                "message": f"Cannot resolve cluster context for namespace '{namespace}'. "
-                           f"Activate a cluster profile in Settings first.",
-            }), 400
+            return _schedule_context_error(namespace, name, [])
         rc, out, err = trident_protect.oc_run(
             ["patch", "schedule", name, "-n", namespace,
              "--type", "merge", "-p", '{"spec":{"enabled":true}}'],
@@ -419,13 +438,10 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/schedules/<namespace>/<name>/disable", methods=["POST"])
     def api_disable_schedule(namespace, name):
-        ctx = request.args.get("context") or _resolve_schedule_context(namespace)
+        override = request.args.get("context") or None
+        ctx = override or _resolve_schedule_context(namespace, name)
         if not ctx:
-            return jsonify({
-                "ok": False,
-                "message": f"Cannot resolve cluster context for namespace '{namespace}'. "
-                           f"Activate a cluster profile in Settings first.",
-            }), 400
+            return _schedule_context_error(namespace, name, [])
         rc, out, err = trident_protect.oc_run(
             ["patch", "schedule", name, "-n", namespace,
              "--type", "merge", "-p", '{"spec":{"enabled":false}}'],

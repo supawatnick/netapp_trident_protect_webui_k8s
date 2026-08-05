@@ -1,3 +1,41 @@
+## [v1.4.17] — 2026-08-05
+
+### Added — Source Application dropdown in AMR create form
+
+The DR → Create AppMirrorRelationship form (Form tab) now exposes a
+**Source Application** dropdown (`amr-source-app`) so you can choose
+which Application CR to mirror, instead of having the form auto-pick
+`apps[0]` from the selected source namespace.
+
+- Dropdown is populated from the same `/api/dr/apps` endpoint that the
+  existing auto-detect used — no backend changes.
+- The Application's UID is carried via the `data-uid` attribute so the
+  AMR YAML stays accurate when the user overrides the auto-detected app.
+- Auto-selects the first app by default (preserves prior single-app
+  behavior), so the form remains immediately submit-able.
+
+### Fixed — enable/disable schedule on any namespace / cluster profile
+
+The enable/disable schedule endpoints now use **discovery** to find which
+configured cluster actually owns the Schedule CR, instead of relying on
+the active profile or a namespace-naming convention.
+
+- `_resolve_schedule_context(namespace, name)` iterates every configured
+  profile (active first) and queries the Schedule CR via
+  `trident_protect._get(...)`. Returns the kubecontext of the owning
+  cluster.
+- New `_schedule_context_error()` returns a 400 with a helpful message
+  listing the clusters that were checked.
+- `schedules.html toggleSchedule()` no longer resolves context on the
+  client — the backend discovers the cluster. The
+  `?context=<kubecontext>` override still works for callers that want
+  to pin a specific cluster.
+
+This fixes the "Cannot resolve cluster context for namespace X" error
+when toggling a Schedule that lives on the non-active cluster in a
+multi-cluster setup. Aligned with the OCP edition (v1.4.16 schedule
+discovery fix).
+
 ## [v1.4.16] — 2026-08-03
 
 ### Changed
